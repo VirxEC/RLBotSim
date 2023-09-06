@@ -1,0 +1,4 @@
+/target
+**/generated
+**/collision_meshes
+.vscode
