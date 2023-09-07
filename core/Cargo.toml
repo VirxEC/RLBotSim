@@ -1,12 +1,12 @@
 [package]
-name = "rlbot_interface_sim"
+name = "rlbot_core_types"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["lib"]
 
 [dependencies]
-rlbot_core_types = { path = "../core" }
+flatbuffers = "23.5.26"

@@ -203,9 +203,9 @@ checksum = "b4682ae6287fcf752ecaabbfcc7b6f9b72aa33933dc23a554d853aea8eea8635"
 
 [[package]]
 name = "bytes"
-version = "1.4.0"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89b2fd2a0dcf38d7971e2194b6b6eebab45ae01067456a7fd93d5547a61b70be"
+checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
 
 [[package]]
 name = "cc"
@@ -733,15 +733,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dbb5fb1acd8a1a18b3dd5be62d25485eb770e05afb408a9627d14d451bae12da"
 
 [[package]]
+name = "rlbot_core_types"
+version = "0.1.0"
+dependencies = [
+ "flatbuffers",
+]
+
+[[package]]
 name = "rlbot_interface_sim"
 version = "0.1.0"
+dependencies = [
+ "rlbot_core_types",
+]
 
 [[package]]
 name = "rlbot_sim"
 version = "0.1.0"
 dependencies = [
- "flatbuffers",
  "glam",
+ "rlbot_core_types",
  "rocketsim_rs",
  "tokio",
 ]

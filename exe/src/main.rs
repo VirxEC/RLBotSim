@@ -1,13 +1,12 @@
 mod deflat;
 mod game;
-mod generated;
 
 use deflat::ExtraInfo;
 use game::{run_rl, SimMessage};
-use generated::rlbot_generated::rlbot::flat;
 
+use rlbot_core_types::{flatbuffers, gen::rlbot::flat, SocketDataType};
 use rocketsim_rs::{
-    bytes::{FromBytesExact, ToBytes},
+    bytes::FromBytesExact,
     init,
     sim::{CarConfig, Team},
 };
@@ -73,7 +72,7 @@ async fn main() -> io::Result<()> {
 }
 
 async fn handle_connection(mut bot_stream: TcpStream, rl_address: String) -> io::Result<()> {
-    // println!("Something connected to RLBot @ {}!", stream.peer_addr()?);
+    println!("Something connected to RLBot @ {}!", bot_stream.peer_addr()?);
 
     let (bot_r, bot_w) = bot_stream.split();
     let mut bot_reader = BufReader::new(bot_r);
@@ -99,13 +98,10 @@ async fn handle_connection(mut bot_stream: TcpStream, rl_address: String) -> io:
                 bot_reader.read_exact(&mut bytes).await?;
 
                 match SocketDataType::from(msg_type) {
-                    SocketDataType::MatchSettings => {
-                        send_match_settings(flatbuffers::root::<flat::MatchSettings>(&bytes).unwrap(), &mut rl_writer).await?;
-                    }
-                    SocketDataType::ReadyMessage => {
-                        handle_ready_message(flatbuffers::root::<flat::ReadyMessage>(&bytes).unwrap(), &mut rl_writer).await?;
-                    }
-                    data_type => {dbg!(data_type);},
+                    SocketDataType::FieldInfo => handle_field_info(bytes, &mut rl_writer).await?,
+                    SocketDataType::MatchSettings => handle_match_settings(bytes, &mut rl_writer).await?,
+                    SocketDataType::ReadyMessage => handle_ready_message(bytes, &mut rl_writer)?,
+                    data_type => unimplemented!("Data type {data_type:?} not implemented!"),
                 }
             }
             Ok(msg) = rl_reader.read_u16() => {
@@ -128,59 +124,30 @@ async fn handle_connection(mut bot_stream: TcpStream, rl_address: String) -> io:
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug)]
-enum SocketDataType {
-    GameTickPacket = 1,
-    FieldInfo,
-    MatchSettings,
-    PlayerInput,
-    ActorMapping,
-    ComputerId,
-    DesiredGameState,
-    RenderGroup,
-    QuickChat,
-    BallPrediction,
-    ReadyMessage,
-    MessagePacket,
-}
-
-impl SocketDataType {
-    #[inline]
-    fn from_u16(data_type: u16) -> Self {
-        match data_type {
-            1 => SocketDataType::GameTickPacket,
-            2 => SocketDataType::FieldInfo,
-            3 => SocketDataType::MatchSettings,
-            4 => SocketDataType::PlayerInput,
-            5 => SocketDataType::ActorMapping,
-            6 => SocketDataType::ComputerId,
-            7 => SocketDataType::DesiredGameState,
-            8 => SocketDataType::RenderGroup,
-            9 => SocketDataType::QuickChat,
-            10 => SocketDataType::BallPrediction,
-            11 => SocketDataType::ReadyMessage,
-            12 => SocketDataType::MessagePacket,
-            _ => panic!("Invalid socket data type: {}", data_type),
-        }
-    }
-}
-
-impl From<u16> for SocketDataType {
-    #[inline]
-    fn from(data_type: u16) -> Self {
-        SocketDataType::from_u16(data_type)
-    }
-}
-
 async fn write_bytes(rl_writer: &mut BufWriter<WriteHalf<'_>>, bytes: Vec<u8>) -> io::Result<()> {
     rl_writer.write_u16(bytes.len() as u16).await?;
     rl_writer.write_all(&bytes).await
 }
 
-async fn send_match_settings(
-    match_settings: flat::MatchSettings<'_>,
-    rl_writer: &mut BufWriter<WriteHalf<'_>>,
-) -> io::Result<()> {
+async fn handle_field_info(bytes: Vec<u8>, rl_writer: &mut BufWriter<WriteHalf<'_>>) -> io::Result<()> {
+    if bytes.len() == 1 {
+        write_bytes(rl_writer, vec![5]).await?;
+        rl_writer.flush().await?;
+        return Ok(());
+    }
+
+    unimplemented!("Setting the FieldInfo is not implemented!");
+}
+
+async fn handle_match_settings(bytes: Vec<u8>, rl_writer: &mut BufWriter<WriteHalf<'_>>) -> io::Result<()> {
+    if bytes.len() == 1 {
+        write_bytes(rl_writer, vec![4]).await?;
+        rl_writer.flush().await?;
+        return Ok(());
+    }
+
+    let match_settings = flatbuffers::root::<flat::MatchSettings>(&bytes).unwrap();
+
     // create the required SimChange messages from match_settings
     write_bytes(rl_writer, SimMessage::Reset.to_bytes()).await?;
 
@@ -202,16 +169,16 @@ async fn send_match_settings(
     }
 
     write_bytes(rl_writer, SimMessage::Kickoff.to_bytes()).await?;
+    write_bytes(rl_writer, SimMessage::MatchSettings(bytes).to_bytes()).await?;
 
     rl_writer.flush().await?;
 
     Ok(())
 }
 
-async fn handle_ready_message(
-    ready_message: flat::ReadyMessage<'_>,
-    _rl_connection: &mut BufWriter<WriteHalf<'_>>,
-) -> io::Result<()> {
+fn handle_ready_message(bytes: Vec<u8>, _rl_writer: &mut BufWriter<WriteHalf<'_>>) -> io::Result<()> {
+    let ready_message = flatbuffers::root::<flat::ReadyMessage>(&bytes).unwrap();
+
     let _wants_quick_chat = ready_message.wantsQuickChat();
     let _wants_game_messages = ready_message.wantsGameMessages();
     let _wants_ball_predictions = ready_message.wantsBallPredictions();

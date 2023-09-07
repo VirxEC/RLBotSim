@@ -1,4 +1,4 @@
-use crate::generated::rlbot_generated::rlbot::flat;
+use rlbot_core_types::gen::rlbot::flat;
 
 // pub struct LoadoutPaint {
 //     pub car_paint_id: i32,

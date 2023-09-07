@@ -2,4 +2,4 @@
 
 - Uses Flatbuffers and sockets
 
-`./flatbuffers/flatc --rust -o ./src/generated ./flatbuffers/rlbot.fbs`
+`./core/flatbuffers/flatc --rust -o ./core/src/generated ./core/flatbuffers/rlbot.fbs`

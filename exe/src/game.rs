@@ -5,8 +5,8 @@ use std::{
     time::Duration,
 };
 
-use flatbuffers::FlatBufferBuilder;
 use glam::Quat;
+use rlbot_core_types::{flatbuffers::FlatBufferBuilder, gen::rlbot::flat, SocketDataType};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
     net::{TcpListener, TcpStream, UdpSocket},
@@ -21,17 +21,20 @@ use rocketsim_rs::{
     GameState,
 };
 
-use crate::{generated::rlbot_generated::rlbot::flat, SocketDataType, RLBOT_EXTRA_INFO};
+use crate::RLBOT_EXTRA_INFO;
 
 #[derive(Debug)]
 pub enum SimMessage {
     Reset,
     AddCar((Team, CarConfig)),
     Kickoff,
+    MatchSettings(Vec<u8>),
+    WantMatchSettings(u64),
+    WantFieldInfo(u64),
 }
 
 impl SimMessage {
-    fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
         match bytes[0] {
             0 => Self::Reset,
             1 => {
@@ -39,13 +42,16 @@ impl SimMessage {
                 Self::AddCar((Team::from_bytes(&bytes[1..]), car_config))
             }
             2 => Self::Kickoff,
+            3 => Self::MatchSettings(bytes[1..].to_vec()),
+            4 => Self::WantMatchSettings(u64::from_bytes(&bytes[1..])),
+            5 => Self::WantFieldInfo(u64::from_bytes(&bytes[1..])),
             change_type => unimplemented!("SimChange type {change_type} not implemented!"),
         }
     }
 }
 
-impl ToBytes for SimMessage {
-    fn to_bytes(&self) -> Vec<u8> {
+impl SimMessage {
+    pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         match self {
             Self::Reset => bytes.push(0),
@@ -56,6 +62,21 @@ impl ToBytes for SimMessage {
                 bytes.extend_from_slice(&car_config.to_bytes());
             }
             Self::Kickoff => bytes.push(2),
+            Self::MatchSettings(data) => {
+                bytes.reserve(1 + data.len());
+                bytes.push(3);
+                bytes.extend_from_slice(data);
+            }
+            Self::WantMatchSettings(client_id) => {
+                bytes.reserve(1 + 4);
+                bytes.push(4);
+                bytes.extend_from_slice(&client_id.to_le_bytes());
+            }
+            Self::WantFieldInfo(client_id) => {
+                bytes.reserve(1 + 4);
+                bytes.push(5);
+                bytes.extend_from_slice(&client_id.to_le_bytes());
+            }
         }
         bytes
     }
@@ -66,7 +87,7 @@ const RLVISER_PATH: &str = if cfg!(windows) { "./rlviser.exe" } else { "./rlvise
 async fn init() -> io::Result<(UdpSocket, SocketAddr)> {
     // launch RLViser
     if let Err(e) = Command::new(RLVISER_PATH).spawn() {
-        println!("Failed to launch RLViser ({RLVISER_PATH}): {e}");
+        eprintln!("Failed to launch RLViser ({RLVISER_PATH}): {e}");
     }
 
     // Connect to RLViser
@@ -110,7 +131,9 @@ pub async fn run_rl(address: String) -> io::Result<()> {
     let tcp = TcpListener::bind(address).await?;
     let (sim_msg_tx, mut sim_msg_rx) = mpsc::channel(128);
     let (msg_distrib_tx, msg_distrib_rx) = watch::channel(Vec::new());
+    let mut client_msg_txs = Vec::new();
 
+    let mut match_settings_msg = Vec::new();
     let mut tick = time::interval(Duration::from_secs_f32(1. / 120.));
     let mut arena = Arena::default_standard();
     arena.pin_mut().set_goal_scored_callback(
@@ -136,8 +159,11 @@ pub async fn run_rl(address: String) -> io::Result<()> {
             Ok((stream, _)) = tcp.accept() => {
                 let tx_clone = sim_msg_tx.clone();
                 let rx_clone = msg_distrib_rx.clone();
-                tokio::spawn(async {
-                    handle_rl_request(stream, tx_clone, rx_clone).await
+                let (client_only_tx, client_only_rx) = mpsc::channel(16);
+                let client_id = client_msg_txs.len();
+                client_msg_txs.push(client_only_tx);
+                tokio::spawn(async move {
+                    handle_rl_request(stream, tx_clone, rx_clone, client_only_rx, (client_id as u64).to_ne_bytes()).await
                 });
             }
             Some(msg) = sim_msg_rx.recv() => match msg {
@@ -148,10 +174,23 @@ pub async fn run_rl(address: String) -> io::Result<()> {
                     kickoff_tick_count = arena.get_tick_count();
                     arena.pin_mut().reset_to_random_kickoff(None)
                 },
+                SimMessage::MatchSettings(data) => {
+                    match_settings_msg.clear();
+                    match_settings_msg.reserve(4 + data.len());
+                    match_settings_msg.write_u16(SocketDataType::MatchSettings as u16).await.unwrap();
+                    match_settings_msg.write_u16(data.len() as u16).await.unwrap();
+                    match_settings_msg.extend_from_slice(&data);
+                }
+                SimMessage::WantMatchSettings(client_id) => {
+                    client_msg_txs[client_id as usize].send(match_settings_msg.clone()).await.unwrap();
+                }
+                SimMessage::WantFieldInfo(client_id) => {
+                    client_msg_txs[client_id as usize].send(build_fi_flat(arena.iter_pad_static()).await).await.unwrap();
+                }
             },
             _ = tick.tick() => {
                 if is_round_active {
-                    // set car controls!
+                    // TODO: set car controls!
                     arena.pin_mut().step(1);
                 }
 
@@ -200,8 +239,10 @@ async fn handle_rl_request(
     mut stream: TcpStream,
     tx: mpsc::Sender<SimMessage>,
     mut rx: watch::Receiver<Vec<u8>>,
+    mut only_rx: mpsc::Receiver<Vec<u8>>,
+    client_id: [u8; 8],
 ) -> io::Result<()> {
-    println!("Something connected to RLBot @ {}!", stream.peer_addr()?);
+    println!("Something connected to RocketSim @ {}!", stream.peer_addr()?);
 
     let (r, w) = stream.split();
     let mut reader = BufReader::new(r);
@@ -218,7 +259,15 @@ async fn handle_rl_request(
                 let mut buf = vec![0; num_bytes as usize];
                 reader.read_exact(&mut buf).await?;
 
+                if (4..=5).contains(&buf[0]) {
+                    buf.extend_from_slice(&client_id)
+                }
+
                 tx.send(SimMessage::from_bytes(&buf)).await.expect("failed to send SimChange");
+            }
+            Some(msg) = only_rx.recv() => {
+                writer.write_all(&msg).await?;
+                writer.flush().await?;
             }
             Ok(()) = rx.changed() => {
                 let msg = rx.borrow().clone();
@@ -237,6 +286,61 @@ fn build_vector3_flat(vector: Vec3) -> flat::Vector3 {
 #[inline]
 fn build_rotator_flat(angle: Angle) -> flat::Rotator {
     flat::Rotator::new(angle.pitch, angle.yaw, angle.roll)
+}
+
+async fn build_fi_flat(game_pads: impl Iterator<Item = (bool, Vec3)> + '_) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+
+    let pads = game_pads
+        .into_iter()
+        .map(|(is_full_boost, pos)| {
+            flat::BoostPad::create(
+                &mut builder,
+                &flat::BoostPadArgs {
+                    isFullBoost: is_full_boost,
+                    location: Some(&build_vector3_flat(pos)),
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let goals = [
+        flat::GoalInfo::create(
+            &mut builder,
+            &flat::GoalInfoArgs {
+                teamNum: 0,
+                location: Some(&build_vector3_flat(Vec3::new(0., -5120., 642.775))),
+                direction: Some(&build_vector3_flat(Vec3::new(0., 1., 0.))),
+                width: 892.755,
+                height: 642.775,
+            },
+        ),
+        flat::GoalInfo::create(
+            &mut builder,
+            &flat::GoalInfoArgs {
+                teamNum: 1,
+                location: Some(&build_vector3_flat(Vec3::new(0., 5120., 642.775))),
+                direction: Some(&build_vector3_flat(Vec3::new(0., -1., 0.))),
+                width: 892.755,
+                height: 642.775,
+            },
+        ),
+    ];
+
+    let fi_args = flat::FieldInfoArgs {
+        boostPads: Some(builder.create_vector(&pads)),
+        goals: Some(builder.create_vector(&goals)),
+    };
+
+    let fi = flat::FieldInfo::create(&mut builder, &fi_args);
+    builder.finish(fi, None);
+    let data = builder.finished_data();
+
+    let mut vec = Vec::with_capacity(4 + data.len());
+    vec.write_u16(SocketDataType::FieldInfo as u16).await.unwrap();
+    vec.write_u16(data.len() as u16).await.unwrap();
+    vec.extend_from_slice(data);
+    vec
 }
 
 async fn build_gtp_flat(game_state: GameState, mutators: MutatorConfig, game_info: GameInfo) -> Vec<u8> {
