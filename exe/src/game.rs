@@ -259,7 +259,7 @@ async fn handle_rl_request(
                 let mut buf = vec![0; num_bytes as usize];
                 reader.read_exact(&mut buf).await?;
 
-                if (4..=5).contains(&buf[0]) {
+                if buf[0] >= 4 {
                     buf.extend_from_slice(&client_id)
                 }
 
