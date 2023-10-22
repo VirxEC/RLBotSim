@@ -129,9 +129,10 @@ pub unsafe extern "C" fn FreshLiveDataPacket(game_tick_packet: *mut GameTickPack
 
     let packet = flatbuffers::root::<flat::GameTickPacket<'_>>(&bytes).unwrap();
 
-    let game_tick_packet = game_tick_packet.as_mut().unwrap();
+    // this pointer to reference is unsafe because we don't know if the pointer is valid
+    let gtp = game_tick_packet.as_mut().unwrap();
 
-    update_packet(packet, game_tick_packet);
+    update_packet(packet, gtp);
 
     RLBotCoreStatus::Success as i32
 }

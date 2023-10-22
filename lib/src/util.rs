@@ -166,9 +166,13 @@ pub fn update_packet(packet: flat::GameTickPacket<'_>, game_tick_packet: &mut Ga
         gtp_car.jumped = flat_car.jumped();
         gtp_car.double_jumped = flat_car.doubleJumped();
 
-        for (flat_char, gtp_char) in flat_car.name().unwrap().chars().zip(&mut gtp_car.name) {
-            *gtp_char = flat_char as u8;
+        let name = flat_car.name().unwrap();
+        for (flat_char, gtp_char) in name.chars().zip(&mut gtp_car.name) {
+            *gtp_char = flat_char as i32;
         }
+
+        // null terminate the last character
+        gtp_car.name[name.len().min(gtp_car.name.len() - 1)] = 0;
 
         gtp_car.team = flat_car.team() as u8;
         gtp_car.boost = flat_car.boost();
@@ -224,7 +228,7 @@ pub fn update_packet(packet: flat::GameTickPacket<'_>, game_tick_packet: &mut Ga
             .chars()
             .zip(&mut game_tick_packet.game_ball.latest_touch.player_name)
         {
-            *gtp_char = flat_char as u8;
+            *gtp_char = flat_char as i32;
         }
 
         game_tick_packet.game_ball.latest_touch.time_seconds = latest_touch.gameSeconds();

@@ -201,7 +201,6 @@ pub async fn run_rl(address: String) -> io::Result<()> {
             },
             _ = tick.tick() => {
                 if is_round_active {
-                    // TODO: set car controls!
                     arena.pin_mut().step(1);
                 }
 

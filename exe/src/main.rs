@@ -179,8 +179,8 @@ async fn handle_match_settings(bytes: Vec<u8>, rl_writer: &mut BufWriter<WriteHa
         }
     }
 
-    write_bytes(rl_writer, SimMessage::Kickoff.to_bytes()).await?;
     write_bytes(rl_writer, SimMessage::MatchSettings(bytes).to_bytes()).await?;
+    write_bytes(rl_writer, SimMessage::Kickoff.to_bytes()).await?;
 
     rl_writer.flush().await?;
 

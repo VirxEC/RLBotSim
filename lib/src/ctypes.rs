@@ -94,7 +94,7 @@ pub struct Physics {
 #[repr(C)]
 #[derive(Debug)]
 pub struct Touch {
-    pub player_name: [u8; 32],
+    pub player_name: [i32; 32],
     pub time_seconds: f32,
     pub hit_location: Vector3,
     pub hit_normal: Vector3,
@@ -209,7 +209,7 @@ pub struct PlayerInfo {
     pub is_bot: bool,
     pub jumped: bool,
     pub double_jumped: bool,
-    pub name: [u8; 32],
+    pub name: [i32; 32],
     pub team: u8,
     pub boost: i32,
     pub hitbox: BoxShape,
