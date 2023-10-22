@@ -1,9 +1,9 @@
+mod builders;
 mod deflat;
 mod game;
 
 use deflat::ExtraInfo;
 use game::{run_rl, SimMessage};
-
 use rlbot_core_types::{flatbuffers, gen::rlbot::flat, SocketDataType};
 use rocketsim_rs::{
     bytes::FromBytesExact,
@@ -101,6 +101,7 @@ async fn handle_connection(mut bot_stream: TcpStream, rl_address: String) -> io:
                     SocketDataType::FieldInfo => handle_field_info(bytes, &mut rl_writer).await?,
                     SocketDataType::MatchSettings => handle_match_settings(bytes, &mut rl_writer).await?,
                     SocketDataType::ReadyMessage => handle_ready_message(bytes, &mut rl_writer)?,
+                    SocketDataType::PlayerInput => handle_player_input(bytes, &mut rl_writer).await?,
                     data_type => unimplemented!("Data type {data_type:?} not implemented!"),
                 }
             }
@@ -127,6 +128,16 @@ async fn handle_connection(mut bot_stream: TcpStream, rl_address: String) -> io:
 async fn write_bytes(rl_writer: &mut BufWriter<WriteHalf<'_>>, bytes: Vec<u8>) -> io::Result<()> {
     rl_writer.write_u16(u16::try_from(bytes.len()).unwrap()).await?;
     rl_writer.write_all(&bytes).await
+}
+
+async fn handle_player_input(bytes: Vec<u8>, rl_writer: &mut BufWriter<WriteHalf<'_>>) -> io::Result<()> {
+    if bytes.len() == 1 {
+        unimplemented!("Getting a player's input is not implemented!");
+    }
+
+    write_bytes(rl_writer, SimMessage::SetPlayerInput(bytes).to_bytes()).await?;
+    rl_writer.flush().await?;
+    Ok(())
 }
 
 async fn handle_field_info(bytes: Vec<u8>, rl_writer: &mut BufWriter<WriteHalf<'_>>) -> io::Result<()> {
@@ -160,7 +171,7 @@ async fn handle_match_settings(bytes: Vec<u8>, rl_writer: &mut BufWriter<WriteHa
         for car in players {
             write_bytes(
                 rl_writer,
-                SimMessage::AddCar((Team::from_bytes(&[car.team() as u8]), *CarConfig::octane())).to_bytes(),
+                SimMessage::AddCar((Team::from_bytes(&[car.team() as u8]), Box::new(*CarConfig::octane()))).to_bytes(),
             )
             .await?;
 

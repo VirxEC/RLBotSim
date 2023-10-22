@@ -1,12 +1,15 @@
+use crate::builders::{build_fi_flat, build_gtp_flat, GameInfo};
+use rlbot_core_types::{flatbuffers, gen::rlbot::flat, SocketDataType};
+use rocketsim_rs::{
+    bytes::{FromBytesExact, ToBytes, ToBytesExact},
+    sim::{Arena, CarConfig, CarControls, Team},
+};
 use std::{
     net::SocketAddr,
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
-
-use glam::Mat3;
-use rlbot_core_types::{flatbuffers::FlatBufferBuilder, gen::rlbot::flat, SocketDataType};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
     net::{TcpListener, TcpStream, UdpSocket},
@@ -14,23 +17,15 @@ use tokio::{
     time,
 };
 
-use rocketsim_rs::{
-    bytes::{FromBytesExact, ToBytes, ToBytesExact},
-    math::{Angle, Vec3},
-    sim::{Arena, CarConfig, MutatorConfig, Team},
-    GameState,
-};
-
-use crate::RLBOT_EXTRA_INFO;
-
 #[derive(Debug)]
 pub enum SimMessage {
     Reset,
-    AddCar((Team, CarConfig)),
+    AddCar((Team, Box<CarConfig>)),
     Kickoff,
     MatchSettings(Vec<u8>),
     WantMatchSettings(u64),
     WantFieldInfo(u64),
+    SetPlayerInput(Vec<u8>),
 }
 
 impl SimMessage {
@@ -39,12 +34,13 @@ impl SimMessage {
             0 => Self::Reset,
             1 => {
                 let car_config = CarConfig::from_bytes(&bytes[2..]);
-                Self::AddCar((Team::from_bytes(&bytes[1..]), car_config))
+                Self::AddCar((Team::from_bytes(&bytes[1..]), Box::new(car_config)))
             }
             2 => Self::Kickoff,
             3 => Self::MatchSettings(bytes[1..].to_vec()),
             4 => Self::WantMatchSettings(u64::from_bytes(&bytes[1..])),
             5 => Self::WantFieldInfo(u64::from_bytes(&bytes[1..])),
+            6 => Self::SetPlayerInput(bytes[1..].to_vec()),
             change_type => unimplemented!("SimChange type {change_type} not implemented!"),
         }
     }
@@ -76,6 +72,11 @@ impl SimMessage {
                 bytes.reserve(1 + 4);
                 bytes.push(5);
                 bytes.extend_from_slice(&client_id.to_le_bytes());
+            }
+            Self::SetPlayerInput(data) => {
+                bytes.reserve(1 + data.len());
+                bytes.push(6);
+                bytes.extend_from_slice(data);
             }
         }
         bytes
@@ -112,19 +113,8 @@ enum UdpPacketTypes {
     GameState,
 }
 
-struct GameInfo {
-    seconds_elapsed: f32,
-    game_time_remaining: f32,
-    game_speed: f32,
-    is_overtime: bool,
-    is_unlimited_time: bool,
-    is_round_active: bool,
-    is_kickoff_pause: bool,
-    is_match_ended: bool,
-}
-
-static BLUE_TEAM_SCORE: AtomicU64 = AtomicU64::new(0);
-static ORANGE_TEAM_SCORE: AtomicU64 = AtomicU64::new(0);
+pub static BLUE_TEAM_SCORE: AtomicU64 = AtomicU64::new(0);
+pub static ORANGE_TEAM_SCORE: AtomicU64 = AtomicU64::new(0);
 
 #[tokio::main]
 pub async fn run_rl(address: String) -> io::Result<()> {
@@ -186,6 +176,27 @@ pub async fn run_rl(address: String) -> io::Result<()> {
                 }
                 SimMessage::WantFieldInfo(client_id) => {
                     client_msg_txs[client_id as usize].send(build_fi_flat(arena.iter_pad_static()).await).await.unwrap();
+                }
+                SimMessage::SetPlayerInput(data) => {
+                    let player_input = flatbuffers::root::<flat::PlayerInput<'_>>(&data).unwrap();
+                    let index = player_input.playerIndex() as usize;
+                    let controller_state = player_input.controllerState().unwrap();
+                    let car_controls = CarControls {
+                        throttle: controller_state.throttle(),
+                        steer: controller_state.steer(),
+                        pitch: controller_state.pitch(),
+                        yaw: controller_state.yaw(),
+                        roll: controller_state.roll(),
+                        jump: controller_state.jump(),
+                        boost: controller_state.boost(),
+                        handbrake: controller_state.handbrake(),
+                    };
+
+                    let car_id = arena.pin_mut().get_cars()[index];
+
+                    if let Err(e) = arena.pin_mut().set_car_controls(car_id, car_controls) {
+                        eprintln!("Failed to set car controls: {e}");
+                    }
                 }
             },
             _ = tick.tick() => {
@@ -276,217 +287,4 @@ async fn handle_rl_request(
             }
         }
     }
-}
-
-#[inline]
-fn build_vector3_flat(vector: Vec3) -> flat::Vector3 {
-    flat::Vector3::new(vector.x, vector.y, vector.z)
-}
-
-#[inline]
-fn build_rotator_flat(angle: Angle) -> flat::Rotator {
-    flat::Rotator::new(angle.pitch, angle.yaw, angle.roll)
-}
-
-async fn build_fi_flat(game_pads: impl Iterator<Item = (bool, Vec3)> + '_) -> Vec<u8> {
-    let mut builder = FlatBufferBuilder::new();
-
-    let pads = game_pads
-        .into_iter()
-        .map(|(is_full_boost, pos)| {
-            flat::BoostPad::create(
-                &mut builder,
-                &flat::BoostPadArgs {
-                    isFullBoost: is_full_boost,
-                    location: Some(&build_vector3_flat(pos)),
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let goals = [
-        flat::GoalInfo::create(
-            &mut builder,
-            &flat::GoalInfoArgs {
-                teamNum: 0,
-                location: Some(&build_vector3_flat(Vec3::new(0., -5120., 642.775))),
-                direction: Some(&build_vector3_flat(Vec3::new(0., 1., 0.))),
-                width: 892.755,
-                height: 642.775,
-            },
-        ),
-        flat::GoalInfo::create(
-            &mut builder,
-            &flat::GoalInfoArgs {
-                teamNum: 1,
-                location: Some(&build_vector3_flat(Vec3::new(0., 5120., 642.775))),
-                direction: Some(&build_vector3_flat(Vec3::new(0., -1., 0.))),
-                width: 892.755,
-                height: 642.775,
-            },
-        ),
-    ];
-
-    let fi_args = flat::FieldInfoArgs {
-        boostPads: Some(builder.create_vector(&pads)),
-        goals: Some(builder.create_vector(&goals)),
-    };
-
-    let fi = flat::FieldInfo::create(&mut builder, &fi_args);
-    builder.finish(fi, None);
-    let data = builder.finished_data();
-
-    let mut vec = Vec::with_capacity(4 + data.len());
-    vec.write_u16(SocketDataType::FieldInfo as u16).await.unwrap();
-    vec.write_u16(u16::try_from(data.len()).unwrap()).await.unwrap();
-    vec.extend_from_slice(data);
-    vec
-}
-
-async fn build_gtp_flat(game_state: GameState, mutators: MutatorConfig, game_info: GameInfo) -> Vec<u8> {
-    let mut builder = FlatBufferBuilder::new();
-
-    let players = game_state
-        .cars
-        .into_iter()
-        .zip(&RLBOT_EXTRA_INFO.read().await.car_info)
-        .map(|(car, extra)| {
-            let physics = flat::Physics::create(
-                &mut builder,
-                &flat::PhysicsArgs {
-                    location: Some(&build_vector3_flat(car.state.pos)),
-                    velocity: Some(&build_vector3_flat(car.state.vel)),
-                    angularVelocity: Some(&build_vector3_flat(car.state.ang_vel)),
-                    rotation: Some(&build_rotator_flat(Angle::from_rotmat(car.state.rot_mat))),
-                },
-            );
-
-            let name = builder.create_string(&extra.name);
-
-            let hitbox = flat::BoxShape::create(
-                &mut builder,
-                &flat::BoxShapeArgs {
-                    length: car.config.hitbox_size.x,
-                    width: car.config.hitbox_size.y,
-                    height: car.config.hitbox_size.z,
-                },
-            );
-
-            let hitbox_offset = build_vector3_flat(car.config.hitbox_pos_offset);
-
-            flat::PlayerInfo::create(
-                &mut builder,
-                &flat::PlayerInfoArgs {
-                    physics: Some(physics),
-                    scoreInfo: None,
-                    isDemolished: car.state.is_demoed,
-                    hasWheelContact: car.state.has_contact,
-                    isSupersonic: car.state.is_supersonic,
-                    isBot: true,
-                    jumped: car.state.has_jumped,
-                    doubleJumped: car.state.has_double_jumped,
-                    name: Some(name),
-                    team: car.team as i32,
-                    boost: car.state.boost as i32,
-                    hitbox: Some(hitbox),
-                    hitboxOffset: Some(&hitbox_offset),
-                    spawnId: extra.spawn_id,
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let boost_pad_states = game_state
-        .pads
-        .into_iter()
-        .map(|pad| {
-            flat::BoostPadState::create(
-                &mut builder,
-                &flat::BoostPadStateArgs {
-                    isActive: pad.state.is_active,
-                    timer: pad.state.cooldown,
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let ball_physics = flat::Physics::create(
-        &mut builder,
-        &flat::PhysicsArgs {
-            location: Some(&build_vector3_flat(game_state.ball.pos)),
-            velocity: Some(&build_vector3_flat(game_state.ball.vel)),
-            angularVelocity: Some(&build_vector3_flat(game_state.ball.ang_vel)),
-            rotation: Some(&build_rotator_flat(Angle::from(&Mat3::from(game_state.ball.rot_mat)))),
-        },
-    );
-
-    let ball_shape = flat::SphereShape::create(
-        &mut builder,
-        &flat::SphereShapeArgs {
-            diameter: mutators.ball_radius * 2.,
-        },
-    );
-
-    let ball = flat::BallInfo::create(
-        &mut builder,
-        &flat::BallInfoArgs {
-            physics: Some(ball_physics),
-            latestTouch: None,
-            dropShotInfo: None,
-            shape: Some(ball_shape.as_union_value()),
-            shape_type: flat::CollisionShape::SphereShape,
-        },
-    );
-
-    let game_info = flat::GameInfo::create(
-        &mut builder,
-        &flat::GameInfoArgs {
-            secondsElapsed: game_info.seconds_elapsed,
-            frameNum: game_state.tick_count as i32,
-            gameTimeRemaining: game_info.game_time_remaining,
-            gameSpeed: game_info.game_speed,
-            isOvertime: game_info.is_overtime,
-            isUnlimitedTime: game_info.is_unlimited_time,
-            isRoundActive: game_info.is_round_active,
-            isKickoffPause: game_info.is_kickoff_pause,
-            isMatchEnded: game_info.is_match_ended,
-            worldGravityZ: mutators.gravity.z,
-        },
-    );
-
-    let teams = [
-        flat::TeamInfo::create(
-            &mut builder,
-            &flat::TeamInfoArgs {
-                teamIndex: 0,
-                score: BLUE_TEAM_SCORE.load(Ordering::SeqCst) as i32,
-            },
-        ),
-        flat::TeamInfo::create(
-            &mut builder,
-            &flat::TeamInfoArgs {
-                teamIndex: 1,
-                score: ORANGE_TEAM_SCORE.load(Ordering::SeqCst) as i32,
-            },
-        ),
-    ];
-
-    let gtp_args = flat::GameTickPacketArgs {
-        players: Some(builder.create_vector(&players)),
-        boostPadStates: Some(builder.create_vector(&boost_pad_states)),
-        ball: Some(ball),
-        gameInfo: Some(game_info),
-        tileInformation: None,
-        teams: Some(builder.create_vector(&teams)),
-    };
-
-    let gtp = flat::GameTickPacket::create(&mut builder, &gtp_args);
-    builder.finish(gtp, None);
-    let data = builder.finished_data();
-
-    let mut vec = Vec::with_capacity(4 + data.len());
-    vec.write_u16(SocketDataType::GameTickPacket as u16).await.unwrap();
-    vec.write_u16(u16::try_from(data.len()).unwrap()).await.unwrap();
-    vec.extend_from_slice(data);
-    vec
 }

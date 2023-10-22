@@ -59,7 +59,8 @@ pub extern "C" fn UpdatePlayerInput(input: PlayerInput, index: i32) -> i32 {
         return RLBotCoreStatus::NotInitialized as i32;
     };
 
-    dbg!(input, index);
+    let message = build_player_input(input, index);
+    send_message(tcp.try_clone().unwrap(), SocketDataType::PlayerInput, &message);
 
     RLBotCoreStatus::Success as i32
 }
@@ -136,8 +137,22 @@ pub unsafe extern "C" fn FreshLiveDataPacket(game_tick_packet: *mut GameTickPack
 }
 
 /// # Safety
-/// It must be ensured that there are no other references this
+/// It must be ensured that there are no other references this item when calling this function
 #[no_mangle]
 pub unsafe extern "C" fn Free(ptr: *mut u8) {
     dealloc(ptr, Layout::new::<&'static mut [u8]>());
 }
+
+// Renderer stuff
+// Might never implement lol
+
+#[no_mangle]
+pub extern "C" fn Renderer_Constructor(_group_id_hashed: i32) -> usize {
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn Renderer_Destructor(_ptr: usize) {}
+
+#[no_mangle]
+pub extern "C" fn Renderer_FinishAndSend(_ptr: usize) {}

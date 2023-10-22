@@ -37,6 +37,12 @@ pub struct PlayerInput {
     pub use_item: u8,
 }
 
+impl PlayerInput {
+    /// f32 is 4 bytes * 5 = 20 bytes
+    /// u8 is 1 byte * 4 = 4 bytes
+    pub const NUM_BYTES: usize = 4 * 5 + 4;
+}
+
 #[repr(C)]
 #[derive(Debug)]
 pub struct ByteBuffer {

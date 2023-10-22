@@ -1,10 +1,36 @@
-use crate::ctypes::{ByteBuffer, FieldInfoPacket, GameTickPacket};
-use rlbot_core_types::{gen::rlbot::flat, SocketDataType};
+use crate::ctypes::{ByteBuffer, FieldInfoPacket, GameTickPacket, PlayerInput};
+use rlbot_core_types::{flatbuffers, gen::rlbot::flat, SocketDataType};
 use std::{
     io::{BufReader, BufWriter, Read, Write},
     net::TcpStream,
     time::Duration,
 };
+
+pub fn build_player_input(input: PlayerInput, index: i32) -> Vec<u8> {
+    let mut builder = flatbuffers::FlatBufferBuilder::new();
+
+    let controller_state_args = flat::ControllerStateArgs {
+        throttle: input.throttle,
+        steer: input.steer,
+        pitch: input.pitch,
+        yaw: input.yaw,
+        roll: input.roll,
+        jump: input.jump != 0,
+        boost: input.boost != 0,
+        handbrake: input.handbrake != 0,
+        useItem: input.use_item != 0,
+    };
+    let controller_state = flat::ControllerState::create(&mut builder, &controller_state_args);
+
+    let player_input_args = flat::PlayerInputArgs {
+        playerIndex: index,
+        controllerState: Some(controller_state),
+    };
+    let player_input = flat::PlayerInput::create(&mut builder, &player_input_args);
+
+    builder.finish(player_input, None);
+    builder.finished_data().to_vec()
+}
 
 /// "Properly" leaks a vector and stores it's pointer and length
 /// MUST be manually freed or else there will be a memory leak
@@ -18,15 +44,19 @@ pub fn get_byte_buffer(bytes: Vec<u8>) -> ByteBuffer {
 }
 
 pub fn request_datatype(tcp: &mut TcpStream, request_data_type: SocketDataType, timeout_millis: Option<i32>) -> Vec<u8> {
-    {
-        let mut writer = BufWriter::new(tcp.try_clone().unwrap());
-        writer.write_all(&(request_data_type as u16).to_be_bytes()).unwrap();
-        writer.write_all(&1u16.to_be_bytes()).unwrap();
-        writer.write_all(&[0]).unwrap();
-        writer.flush().unwrap();
-    }
-
+    send_message(tcp.try_clone().unwrap(), request_data_type, &[0]);
     get_datatype(tcp, request_data_type, timeout_millis)
+}
+
+pub fn send_message(tcp: TcpStream, request_data_type: SocketDataType, message: &[u8]) {
+    let mut writer = BufWriter::new(tcp);
+    writer.write_all(&(request_data_type as u16).to_be_bytes()).unwrap();
+
+    let message_num_bytes = u16::try_from(message.len()).unwrap();
+    writer.write_all(&message_num_bytes.to_be_bytes()).unwrap();
+
+    writer.write_all(message).unwrap();
+    writer.flush().unwrap();
 }
 
 pub fn get_datatype(tcp: &mut TcpStream, request_data_type: SocketDataType, timeout_millis: Option<i32>) -> Vec<u8> {
