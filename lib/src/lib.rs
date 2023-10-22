@@ -144,16 +144,94 @@ pub unsafe extern "C" fn Free(ptr: *mut u8) {
     dealloc(ptr, Layout::new::<&'static mut [u8]>());
 }
 
+// func = self.game.SendQuickChat
+// func.argtypes = [ctypes.c_void_p, ctypes.c_int]
+// func.restype = ctypes.c_int
+#[no_mangle]
+pub extern "C" fn SendQuickChat(_ptr: usize, _quick_chat: i32) -> i32 {
+    RLBotCoreStatus::Success as i32
+}
+
 // Renderer stuff
 // Might never implement lol
 
+// self.native_constructor = dll_instance.Renderer_Constructor
+// self.native_constructor.argtypes = [ctypes.c_int]
+// self.native_constructor.restype = ctypes.c_void_p
 #[no_mangle]
 pub extern "C" fn Renderer_Constructor(_group_id_hashed: i32) -> usize {
-    0
+    1
 }
 
+// self.native_destructor = dll_instance.Renderer_Destructor
+// self.native_destructor.argtypes = [ctypes.c_void_p]
 #[no_mangle]
 pub extern "C" fn Renderer_Destructor(_ptr: usize) {}
 
+// self.native_finish_and_send = dll_instance.Renderer_FinishAndSend
+// self.native_finish_and_send.argtypes = [ctypes.c_void_p]
 #[no_mangle]
 pub extern "C" fn Renderer_FinishAndSend(_ptr: usize) {}
+
+// self.native_draw_line_3d = dll_instance.Renderer_DrawLine3D
+// self.native_draw_line_3d.argtypes = [ctypes.c_void_p, Color, Vector3, Vector3]
+#[no_mangle]
+pub extern "C" fn Renderer_DrawLine3D(_ptr: usize, _color: Color, _start: Vector3, _end: Vector3) {}
+
+// self.native_draw_polyline_3d = dll_instance.Renderer_DrawPolyLine3D
+// self.native_draw_polyline_3d.argtypes = [ctypes.c_void_p, Color, ctypes.POINTER(Vector3), ctypes.c_int]
+#[no_mangle]
+pub extern "C" fn Renderer_DrawPolyLine3D(_ptr: usize, _color: Color, _points: *const Vector3, _num_points: i32) {}
+
+// self.native_draw_string_2d = dll_instance.Renderer_DrawString2D
+// self.native_draw_string_2d.argtypes = [ctypes.c_void_p, ctypes.c_char_p, Color, Vector3, ctypes.c_int, ctypes.c_int]
+#[no_mangle]
+pub extern "C" fn Renderer_DrawString2D(
+    _ptr: usize,
+    _text: *const u8,
+    _color: Color,
+    _upper_left: Vector3,
+    _scale_x: i32,
+    _scale_y: i32,
+) {
+}
+
+// self.native_draw_string_3d = dll_instance.Renderer_DrawString3D
+// self.native_draw_string_3d.argtypes = [ctypes.c_void_p, ctypes.c_char_p, Color, Vector3, ctypes.c_int, ctypes.c_int]
+#[no_mangle]
+pub extern "C" fn Renderer_DrawString3D(
+    _ptr: usize,
+    _text: *const u8,
+    _color: Color,
+    _upper_left: Vector3,
+    _scale_x: i32,
+    _scale_y: i32,
+) {
+}
+
+// self.native_draw_rect_2d = dll_instance.Renderer_DrawRect2D
+// self.native_draw_rect_2d.argtypes = [ctypes.c_void_p, Color, Vector3, ctypes.c_int, ctypes.c_int, ctypes.c_bool]
+#[no_mangle]
+pub extern "C" fn Renderer_DrawRect2D(
+    _ptr: usize,
+    _color: Color,
+    _upper_left: Vector3,
+    _width: i32,
+    _height: i32,
+    _filled: bool,
+) {
+}
+
+// self.native_draw_rect_3d = dll_instance.Renderer_DrawRect3D
+// self.native_draw_rect_3d.argtypes = [ctypes.c_void_p, Color, Vector3, ctypes.c_int, ctypes.c_int, ctypes.c_bool, ctypes.c_bool]
+#[no_mangle]
+pub extern "C" fn Renderer_DrawRect3D(
+    _ptr: usize,
+    _color: Color,
+    _upper_left: Vector3,
+    _width: i32,
+    _height: i32,
+    _filled: bool,
+    _occluded: bool,
+) {
+}

@@ -357,3 +357,18 @@ pub struct FieldInfoPacket {
     pub goals: [GoalInfo; 200],
     pub num_goals: i32,
 }
+
+// class Color(Struct):
+//     _fields_ = [("r", ctypes.c_ubyte),
+//                 ("g", ctypes.c_ubyte),
+//                 ("b", ctypes.c_ubyte),
+//                 ("a", ctypes.c_ubyte)]
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
