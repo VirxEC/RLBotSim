@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use glam::Quat;
+use glam::Mat3;
 use rlbot_core_types::{flatbuffers::FlatBufferBuilder, gen::rlbot::flat, SocketDataType};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
@@ -172,13 +172,13 @@ pub async fn run_rl(address: String) -> io::Result<()> {
                 SimMessage::Kickoff => {
                     is_round_active = true;
                     kickoff_tick_count = arena.get_tick_count();
-                    arena.pin_mut().reset_to_random_kickoff(None)
+                    arena.pin_mut().reset_to_random_kickoff(None);
                 },
                 SimMessage::MatchSettings(data) => {
                     match_settings_msg.clear();
                     match_settings_msg.reserve(4 + data.len());
                     match_settings_msg.write_u16(SocketDataType::MatchSettings as u16).await.unwrap();
-                    match_settings_msg.write_u16(data.len() as u16).await.unwrap();
+                    match_settings_msg.write_u16(u16::try_from(data.len()).unwrap()).await.unwrap();
                     match_settings_msg.extend_from_slice(&data);
                 }
                 SimMessage::WantMatchSettings(client_id) => {
@@ -197,7 +197,7 @@ pub async fn run_rl(address: String) -> io::Result<()> {
                 let game_state = arena.pin_mut().get_game_state();
                 let rlviser_bytes = game_state.to_bytes();
 
-                let latest_touch_tick_count = game_state.cars.iter().flat_map(|car| {
+                let latest_touch_tick_count = game_state.cars.iter().filter_map(|car| {
                     if car.state.ball_hit_info.is_valid {
                         Some((car.id, car.state.ball_hit_info.tick_count_when_hit))
                     } else {
@@ -338,7 +338,7 @@ async fn build_fi_flat(game_pads: impl Iterator<Item = (bool, Vec3)> + '_) -> Ve
 
     let mut vec = Vec::with_capacity(4 + data.len());
     vec.write_u16(SocketDataType::FieldInfo as u16).await.unwrap();
-    vec.write_u16(data.len() as u16).await.unwrap();
+    vec.write_u16(u16::try_from(data.len()).unwrap()).await.unwrap();
     vec.extend_from_slice(data);
     vec
 }
@@ -416,7 +416,7 @@ async fn build_gtp_flat(game_state: GameState, mutators: MutatorConfig, game_inf
             location: Some(&build_vector3_flat(game_state.ball.pos)),
             velocity: Some(&build_vector3_flat(game_state.ball.vel)),
             angularVelocity: Some(&build_vector3_flat(game_state.ball.ang_vel)),
-            rotation: Some(&build_rotator_flat(Angle::from(Quat::from_array(game_state.ball_rot)))),
+            rotation: Some(&build_rotator_flat(Angle::from(&Mat3::from(game_state.ball.rot_mat)))),
         },
     );
 
@@ -486,7 +486,7 @@ async fn build_gtp_flat(game_state: GameState, mutators: MutatorConfig, game_inf
 
     let mut vec = Vec::with_capacity(4 + data.len());
     vec.write_u16(SocketDataType::GameTickPacket as u16).await.unwrap();
-    vec.write_u16(data.len() as u16).await.unwrap();
+    vec.write_u16(u16::try_from(data.len()).unwrap()).await.unwrap();
     vec.extend_from_slice(data);
     vec
 }

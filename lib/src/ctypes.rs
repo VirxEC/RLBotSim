@@ -40,7 +40,7 @@ pub struct PlayerInput {
 #[repr(C)]
 #[derive(Debug)]
 pub struct ByteBuffer {
-    pub data: *const u8,
+    pub data: *mut u8,
     pub size: usize,
 }
 

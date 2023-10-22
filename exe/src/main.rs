@@ -35,7 +35,7 @@ impl From<u8> for NetworkingRole {
             1 => NetworkingRole::LanClient,
             2 => NetworkingRole::RemoteRLBotServer,
             3 => NetworkingRole::RemoteRLBotClient,
-            _ => panic!("Invalid networking role: {}", role),
+            _ => panic!("Invalid networking role: {role}"),
         }
     }
 }
@@ -125,7 +125,7 @@ async fn handle_connection(mut bot_stream: TcpStream, rl_address: String) -> io:
 }
 
 async fn write_bytes(rl_writer: &mut BufWriter<WriteHalf<'_>>, bytes: Vec<u8>) -> io::Result<()> {
-    rl_writer.write_u16(bytes.len() as u16).await?;
+    rl_writer.write_u16(u16::try_from(bytes.len()).unwrap()).await?;
     rl_writer.write_all(&bytes).await
 }
 

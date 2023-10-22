@@ -1,7 +1,7 @@
 mod generated;
 
-pub use generated::rlbot_generated as gen;
 pub use flatbuffers;
+pub use generated::rlbot_generated as gen;
 
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
