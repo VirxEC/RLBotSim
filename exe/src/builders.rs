@@ -2,7 +2,6 @@ use crate::{
     game::{BLUE_TEAM_SCORE, ORANGE_TEAM_SCORE},
     RLBOT_EXTRA_INFO,
 };
-use glam::Mat3;
 use rlbot_core_types::{flatbuffers::FlatBufferBuilder, gen::rlbot::flat, SocketDataType};
 use rocketsim_rs::{
     math::{Angle, Vec3},
@@ -161,7 +160,7 @@ pub async fn build_gtp_flat(game_state: GameState, mutators: MutatorConfig, game
             location: Some(&build_vector3_flat(game_state.ball.pos)),
             velocity: Some(&build_vector3_flat(game_state.ball.vel)),
             angularVelocity: Some(&build_vector3_flat(game_state.ball.ang_vel)),
-            rotation: Some(&build_rotator_flat(Angle::from(&Mat3::from(game_state.ball.rot_mat)))),
+            rotation: Some(&build_rotator_flat(Angle::from_rotmat(game_state.ball.rot_mat))),
         },
     );
 

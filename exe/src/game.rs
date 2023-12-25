@@ -1,7 +1,7 @@
 use crate::builders::{build_fi_flat, build_gtp_flat, GameInfo};
 use rlbot_core_types::{flatbuffers, gen::rlbot::flat, SocketDataType};
 use rocketsim_rs::{
-    bytes::{FromBytesExact, ToBytes, ToBytesExact},
+    bytes::{FromBytes, FromBytesExact, ToBytes, ToBytesExact},
     sim::{Arena, CarConfig, CarControls, Team},
 };
 use std::{
@@ -270,7 +270,7 @@ async fn handle_rl_request(
                 reader.read_exact(&mut buf).await?;
 
                 if buf[0] >= 4 {
-                    buf.extend_from_slice(&client_id)
+                    buf.extend_from_slice(&client_id);
                 }
 
                 tx.send(SimMessage::from_bytes(&buf)).await.expect("failed to send SimChange");

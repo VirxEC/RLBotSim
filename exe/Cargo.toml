@@ -6,7 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-glam = "0.24.1"
-rocketsim_rs = { version = "0.20.1", features = ["bin"] }
-tokio = { version = "1.32.0", features = ["macros", "rt", "rt-multi-thread", "sync", "net", "io-util", "time"] }
+rocketsim_rs = "0.23.0"
+tokio = { version = "1.35.0", features = ["macros", "rt", "rt-multi-thread", "sync", "net", "io-util", "time"] }
 rlbot_core_types = { path = "../core" }

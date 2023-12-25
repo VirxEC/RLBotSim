@@ -1,3 +1,5 @@
+#![warn(clippy::all)]
+
 mod builders;
 mod deflat;
 mod game;
@@ -6,7 +8,7 @@ use deflat::ExtraInfo;
 use game::{run_rl, SimMessage};
 use rlbot_core_types::{flatbuffers, gen::rlbot::flat, SocketDataType};
 use rocketsim_rs::{
-    bytes::FromBytesExact,
+    bytes::FromBytes,
     init,
     sim::{CarConfig, Team},
 };
