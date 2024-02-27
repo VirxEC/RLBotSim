@@ -2,7 +2,7 @@ use rlbot_core_types::{
     flat::{self, CollisionShapeT},
     flatbuffers, RustMessage,
 };
-use rocketsim_rs::{init, sim::Arena};
+use rocketsim_rs::{bytes::ToBytes, init, sim::Arena, GameState};
 use std::{env::current_dir, pin::Pin, time::Duration};
 use tokio::{
     sync::{broadcast, mpsc},
@@ -25,19 +25,19 @@ pub async fn run_rl(
     let mut game = Arena::default_standard();
     let mut interval = interval(Duration::from_secs_f32(GAME_TPS));
 
-    let mut game_state = flat::GameStateType::Inactive;
+    let mut game_state_type = flat::GameStateType::Inactive;
 
     loop {
         tokio::select! {
             Some(msg) = rx.recv() => {
-                if !handle_message_from_client(&tx, msg, game.pin_mut(), &mut game_state) {
+                if !handle_message_from_client(&tx, msg, game.pin_mut(), &mut game_state_type) {
                     break;
                 }
             }
             // make tokio timer that goes off 120 times per second
             // every time it goes off, send a game tick packet to the client
             _ = interval.tick() => {
-                advance_game(game_state, game.pin_mut(), &tx, &mut flat_builder)
+                advance_game(game_state_type, game.pin_mut(), &tx, &mut flat_builder)
             }
             else => break,
         }
@@ -51,18 +51,18 @@ fn handle_message_from_client(
     tx: &broadcast::Sender<RustMessage>,
     msg: RustMessage,
     game: Pin<&mut Arena>,
-    game_state: &mut flat::GameStateType,
+    game_state_type: &mut flat::GameStateType,
 ) -> bool {
     match msg {
         RustMessage::MatchSettings(match_settings) => {
             dbg!(match_settings.player_configurations.len());
-            *game_state = flat::GameStateType::Active;
+            *game_state_type = flat::GameStateType::Active;
         }
         RustMessage::PlayerInput(input) => {
             dbg!(input);
         }
         RustMessage::StopCommand(info) => {
-            *game_state = flat::GameStateType::Ended;
+            *game_state_type = flat::GameStateType::Ended;
 
             tx.send(RustMessage::None).unwrap();
 
@@ -77,17 +77,21 @@ fn handle_message_from_client(
 }
 
 fn advance_game(
-    game_state: flat::GameStateType,
+    game_state_type: flat::GameStateType,
     mut game: Pin<&mut Arena>,
     tx: &broadcast::Sender<RustMessage>,
     flat_builder: &mut flatbuffers::FlatBufferBuilder,
 ) {
-    if game_state == flat::GameStateType::Active || game_state == flat::GameStateType::Kickoff {
+    if game_state_type == flat::GameStateType::Active || game_state_type == flat::GameStateType::Kickoff {
         game.as_mut().step(1);
     }
 
+    let game_state = game.get_game_state();
+    let _bytes = game_state.to_bytes();
+    // TODO: RLViser stuff
+
     // construct and send out game tick packet
-    let packet = make_game_tick_packet(game, game_state);
+    let packet = make_game_tick_packet(&game_state, game_state_type);
 
     flat_builder.reset();
     let offset = packet.pack(flat_builder);
@@ -97,9 +101,8 @@ fn advance_game(
     let _ = tx.send(RustMessage::GameTickPacket(bytes.into()));
 }
 
-fn make_game_tick_packet(game: Pin<&mut Arena>, game_state_type: flat::GameStateType) -> flat::GameTickPacketT {
+fn make_game_tick_packet(game_state: &GameState, game_state_type: flat::GameStateType) -> flat::GameTickPacketT {
     let mut packet = flat::GameTickPacketT::default();
-    let game_state = game.get_game_state();
 
     let mut sphere_shape: Box<flat::SphereShapeT> = Box::default();
     sphere_shape.diameter = 91.25 * 2.;
