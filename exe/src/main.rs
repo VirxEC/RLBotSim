@@ -1,125 +1,43 @@
 #![warn(clippy::all)]
 
-mod builders;
-mod deflat;
 mod game;
 
-use deflat::ExtraInfo;
-use game::{run_rl, SimMessage};
-use rlbot_core_types::{flatbuffers, gen::rlbot::flat, SocketDataType};
-use rocketsim_rs::{
-    bytes::FromBytes,
-    init,
-    sim::{CarConfig, Team},
+use rlbot_core_types::{
+    flat::{self, MatchSettingsT},
+    flatbuffers, RustMessage, SocketDataType,
 };
+use std::thread;
 use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
-    net::{tcp::WriteHalf, TcpListener, TcpStream},
-    sync::RwLock,
+    io::{AsyncReadExt, AsyncWriteExt, Result as IoResult},
+    net::{TcpListener, TcpStream},
+    sync::{broadcast, mpsc},
 };
 
 const RLBOT_SOCKETS_PORT: u16 = 23234;
-pub static RLBOT_EXTRA_INFO: RwLock<ExtraInfo> = RwLock::const_new(ExtraInfo::const_default());
-
-#[derive(Clone, Copy, Debug)]
-enum NetworkingRole {
-    None,
-    LanClient,
-    RemoteRLBotServer,
-    RemoteRLBotClient,
-}
-
-impl From<u8> for NetworkingRole {
-    #[inline]
-    fn from(role: u8) -> Self {
-        match role {
-            0 => NetworkingRole::None,
-            1 => NetworkingRole::LanClient,
-            2 => NetworkingRole::RemoteRLBotServer,
-            3 => NetworkingRole::RemoteRLBotClient,
-            _ => panic!("Invalid networking role: {role}"),
-        }
-    }
-}
+const DEFAULT_ADDRESS: &str = "127.0.0.1";
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
-    init(None);
+async fn main() -> IoResult<()> {
+    let (game_tx_hold, _) = broadcast::channel(255);
+    let (tx, game_rx) = mpsc::channel(255);
+    let (shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
 
-    let args: Vec<String> = std::env::args().collect();
+    let game_tx = game_tx_hold.clone();
+    thread::spawn(move || game::run_rl(game_tx, game_rx, shutdown_sender));
 
-    let port = &args[1];
-    let address = &args[2];
-    let role = NetworkingRole::from(args[3].parse::<u8>().unwrap());
+    let tcp_connection = TcpListener::bind(format!("{DEFAULT_ADDRESS}:{RLBOT_SOCKETS_PORT}")).await?;
 
-    let rl_address = format!("{address}:{port}");
-    println!("address: {rl_address}, role: {role:?}");
-
-    match role {
-        NetworkingRole::None => {
-            let rl_address_clone = rl_address.clone();
-            std::thread::spawn(|| run_rl(rl_address_clone));
-        }
-        _ => unimplemented!("Networking role {role:?} not implemented!"),
-    }
-
-    let tcp_connection = TcpListener::bind(format!("{address}:{RLBOT_SOCKETS_PORT}")).await?;
-    // println!("Listening on {address}:{port}...");
-
-    loop {
-        let (stream, _) = tcp_connection.accept().await?;
-        let rl_address_clone = rl_address.clone();
-        tokio::spawn(async { handle_connection(stream, rl_address_clone).await });
-    }
-}
-
-async fn handle_connection(mut bot_stream: TcpStream, rl_address: String) -> io::Result<()> {
-    println!("Something connected to RLBot @ {}!", bot_stream.peer_addr()?);
-
-    let (bot_r, bot_w) = bot_stream.split();
-    let mut bot_reader = BufReader::new(bot_r);
-    let mut bot_writer = BufWriter::new(bot_w);
-
-    let mut rl_stream = TcpStream::connect(rl_address).await?;
-    let (rl_r, rl_w) = rl_stream.split();
-    let mut rl_writer = BufWriter::new(rl_w);
-    let mut rl_reader = BufReader::new(rl_r);
+    println!("Server listening on port {RLBOT_SOCKETS_PORT}");
 
     loop {
         tokio::select! {
-            msg = bot_reader.read_u16() => {
-                let msg_type = msg?;
-
-                let n = bot_reader.read_u16().await? as usize;
-
-                if n == 0 {
-                    break;
-                }
-
-                let mut bytes = vec![0; n];
-                bot_reader.read_exact(&mut bytes).await?;
-
-                match SocketDataType::from(msg_type) {
-                    SocketDataType::FieldInfo => handle_field_info(bytes, &mut rl_writer).await?,
-                    SocketDataType::MatchSettings => handle_match_settings(bytes, &mut rl_writer).await?,
-                    SocketDataType::ReadyMessage => handle_ready_message(bytes, &mut rl_writer)?,
-                    SocketDataType::PlayerInput => handle_player_input(bytes, &mut rl_writer).await?,
-                    data_type => unimplemented!("Data type {data_type:?} not implemented!"),
-                }
+            Ok((stream, _)) = tcp_connection.accept() => {
+                let tx_2 = tx.clone();
+                let rx = game_tx_hold.subscribe();
+                tokio::spawn(async move { handle_connection(stream, tx_2, rx).await });
             }
-            Ok(msg) = rl_reader.read_u16() => {
-                let n = rl_reader.read_u16().await?;
-
-                if n == 0 {
-                    break;
-                }
-
-                let mut bytes = vec![0; n as usize + 4];
-                bytes[..2].copy_from_slice(&msg.to_be_bytes());
-                bytes[2..4].copy_from_slice(&n.to_be_bytes());
-                rl_reader.read_exact(&mut bytes[4..]).await?;
-
-                bot_writer.write_all(&bytes).await?;
+            _ = shutdown_receiver.recv() => {
+                break;
             }
         }
     }
@@ -127,74 +45,91 @@ async fn handle_connection(mut bot_stream: TcpStream, rl_address: String) -> io:
     Ok(())
 }
 
-async fn write_bytes(rl_writer: &mut BufWriter<WriteHalf<'_>>, bytes: Vec<u8>) -> io::Result<()> {
-    rl_writer.write_u16(u16::try_from(bytes.len()).unwrap()).await?;
-    rl_writer.write_all(&bytes).await
-}
+async fn handle_connection(
+    mut client: TcpStream,
+    tx: mpsc::Sender<RustMessage>,
+    mut rx: broadcast::Receiver<RustMessage>,
+) -> IoResult<()> {
+    let mut got_ready_message = false;
 
-async fn handle_player_input(bytes: Vec<u8>, rl_writer: &mut BufWriter<WriteHalf<'_>>) -> io::Result<()> {
-    if bytes.len() == 1 {
-        unimplemented!("Getting a player's input is not implemented!");
-    }
+    let mut _wants_game_messages = false;
+    let mut _wants_comms = false;
+    let mut _wants_ball_predictions = false;
 
-    write_bytes(rl_writer, SimMessage::SetPlayerInput(bytes).to_bytes()).await?;
-    rl_writer.flush().await?;
-    Ok(())
-}
+    let mut _close_after_match = false;
 
-async fn handle_field_info(bytes: Vec<u8>, rl_writer: &mut BufWriter<WriteHalf<'_>>) -> io::Result<()> {
-    if bytes.len() == 1 {
-        write_bytes(rl_writer, vec![5]).await?;
-        rl_writer.flush().await?;
-        return Ok(());
-    }
+    let mut buffer = Vec::with_capacity(512);
 
-    unimplemented!("Setting the FieldInfo is not implemented!");
-}
+    loop {
+        tokio::select! {
+            Ok(data_type) = client.read_u16() => {
+                let size = client.read_u16().await?;
 
-async fn handle_match_settings(bytes: Vec<u8>, rl_writer: &mut BufWriter<WriteHalf<'_>>) -> io::Result<()> {
-    if bytes.len() == 1 {
-        write_bytes(rl_writer, vec![4]).await?;
-        rl_writer.flush().await?;
-        return Ok(());
-    }
+                buffer.resize(usize::from(size), 0);
+                client.read_exact(&mut buffer).await?;
 
-    let match_settings = flatbuffers::root::<flat::MatchSettings>(&bytes).unwrap();
+                match SocketDataType::from_u16(data_type) {
+                    SocketDataType::None => {
+                        println!("Received None message type, closing connection");
+                        break;
+                    }
+                    SocketDataType::MatchSettings => {
+                        println!("Received MatchSettings message type");
 
-    // create the required SimChange messages from match_settings
-    write_bytes(rl_writer, SimMessage::Reset.to_bytes()).await?;
+                        let match_settings = flatbuffers::root::<flat::MatchSettings>(&buffer).unwrap().unpack();
+                        tx.send(RustMessage::MatchSettings(match_settings)).await.unwrap();
+                    }
+                    SocketDataType::ReadyMessage => {
+                        let ready_message = flatbuffers::root::<flat::ReadyMessage>(&buffer).unwrap().unpack();
+                        
+                        _wants_game_messages = ready_message.wants_game_messages;
+                        _wants_comms = ready_message.wants_comms;
+                        _wants_ball_predictions = ready_message.wants_ball_predictions;
+                        _close_after_match = ready_message.close_after_match;
+                        got_ready_message = true;
 
-    let mut extra_info = RLBOT_EXTRA_INFO.write().await;
+                    }
+                    SocketDataType::StartCommand => {
+                        let start_command = flatbuffers::root::<flat::StartCommand>(&buffer).unwrap().unpack();
+                        let match_settings_path = start_command.config_path;
+                        println!("Match settings path: {match_settings_path}");
 
-    if let Some(players) = match_settings.playerConfigurations() {
-        extra_info.car_info.clear();
-        extra_info.car_info.reserve(players.len());
+                        tx.send(RustMessage::MatchSettings(MatchSettingsT::default())).await.unwrap();
+                    }
+                    SocketDataType::StopCommand => {
+                        let command = flatbuffers::root::<flat::StopCommand>(&buffer).unwrap().unpack();
+                        tx.send(RustMessage::StopCommand(command)).await.unwrap();
+                    }
+                    i => {
+                        println!("Received message type: {i:?}");
+                    }
+                }
+            }
+            Ok(msg) = rx.recv() => {
+                match msg {
+                    RustMessage::None => {
+                        println!("Received None message type, closing connection");
+                        break;
+                    }
+                    RustMessage::GameTickPacket(packet) => {
+                        if !got_ready_message {
+                            continue;
+                        }
 
-        for car in players {
-            write_bytes(
-                rl_writer,
-                SimMessage::AddCar((Team::from_bytes(&[car.team() as u8]), Box::new(*CarConfig::octane()))).to_bytes(),
-            )
-            .await?;
-
-            extra_info.car_info.push(car.into());
+                        client.write_u16(SocketDataType::GameTickPacket as u16).await?;
+                        client.write_u16(packet.len() as u16).await?;
+                        client.write_all(&packet).await?;
+                    }
+                    i => {
+                        println!("Received message type: {i:?}");
+                    }
+                }
+            }
+            else => break,
         }
     }
 
-    write_bytes(rl_writer, SimMessage::MatchSettings(bytes).to_bytes()).await?;
-    write_bytes(rl_writer, SimMessage::Kickoff.to_bytes()).await?;
-
-    rl_writer.flush().await?;
-
-    Ok(())
-}
-
-fn handle_ready_message(bytes: Vec<u8>, _rl_writer: &mut BufWriter<WriteHalf<'_>>) -> io::Result<()> {
-    let ready_message = flatbuffers::root::<flat::ReadyMessage>(&bytes).unwrap();
-
-    let _wants_quick_chat = ready_message.wantsQuickChat();
-    let _wants_game_messages = ready_message.wantsGameMessages();
-    let _wants_ball_predictions = ready_message.wantsBallPredictions();
+    println!("Client exiting loop and closing connection");
 
     Ok(())
 }
