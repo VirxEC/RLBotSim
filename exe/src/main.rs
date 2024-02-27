@@ -1,11 +1,10 @@
 #![warn(clippy::all)]
 
 mod game;
+mod parse;
 
-use rlbot_core_types::{
-    flat::{self, MatchSettingsT},
-    flatbuffers, RustMessage, SocketDataType,
-};
+use parse::parse_file_for_match_settings;
+use rlbot_core_types::{flat, flatbuffers, RustMessage, SocketDataType};
 use std::thread;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Result as IoResult},
@@ -101,10 +100,9 @@ async fn handle_client_message(
         }
         SocketDataType::StartCommand => {
             let start_command = flatbuffers::root::<flat::StartCommand>(buffer).unwrap().unpack();
-            let match_settings_path = start_command.config_path;
-            println!("Match settings path: {match_settings_path}");
+            let match_settings = parse_file_for_match_settings(start_command.config_path).await?;
 
-            tx.send(RustMessage::MatchSettings(MatchSettingsT::default())).await.unwrap();
+            tx.send(RustMessage::MatchSettings(match_settings)).await.unwrap();
         }
         SocketDataType::StopCommand => {
             let command = flatbuffers::root::<flat::StopCommand>(buffer).unwrap().unpack();

@@ -1,3 +1,4 @@
+mod from_str;
 #[allow(clippy::all, non_snake_case, unused_imports)]
 mod generated;
 
