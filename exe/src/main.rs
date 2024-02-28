@@ -1,15 +1,17 @@
 #![warn(clippy::all)]
 
 mod game;
+mod messages;
 mod parse;
+mod util;
 
 use parse::parse_file_for_match_settings;
-use rlbot_core_types::{flat, flatbuffers, RustMessage, SocketDataType};
+use rlbot_sockets::{flat, flatbuffers::root, SocketDataType};
 use std::thread;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Result as IoResult},
     net::{TcpListener, TcpStream},
-    sync::{broadcast, mpsc},
+    sync::{broadcast, mpsc, oneshot},
 };
 
 const RLBOT_SOCKETS_PORT: u16 = 23234;
@@ -46,8 +48,8 @@ async fn main() -> IoResult<()> {
 
 async fn handle_connection(
     mut client: TcpStream,
-    tx: mpsc::Sender<RustMessage>,
-    mut rx: broadcast::Receiver<RustMessage>,
+    tx: mpsc::Sender<messages::ToGame>,
+    mut rx: broadcast::Receiver<messages::FromGame>,
 ) -> IoResult<()> {
     let mut client_params = None;
     let mut buffer = Vec::with_capacity(512);
@@ -76,7 +78,7 @@ async fn handle_connection(
 async fn handle_client_message(
     data_type: u16,
     client: &mut TcpStream,
-    tx: &mpsc::Sender<RustMessage>,
+    tx: &mpsc::Sender<messages::ToGame>,
     buffer: &mut Vec<u8>,
     client_params: &mut Option<flat::ReadyMessageT>,
 ) -> IoResult<bool> {
@@ -91,22 +93,32 @@ async fn handle_client_message(
             return Ok(false);
         }
         SocketDataType::MatchSettings => {
-            let match_settings = flatbuffers::root::<flat::MatchSettings>(buffer).unwrap().unpack();
-            tx.send(RustMessage::MatchSettings(match_settings)).await.unwrap();
+            let match_settings = root::<flat::MatchSettings>(buffer).unwrap().unpack();
+            tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
         }
         SocketDataType::ReadyMessage => {
-            let ready_message = flatbuffers::root::<flat::ReadyMessage>(buffer).unwrap().unpack();
+            let ready_message = root::<flat::ReadyMessage>(buffer).unwrap().unpack();
             client_params.replace(ready_message);
+
+            let (match_settings_tx, match_settings_rx) = oneshot::channel();
+            tx.send(messages::ToGame::MatchSettingsRequest(match_settings_tx))
+                .await
+                .unwrap();
+
+            let match_settings_flat = match_settings_rx.await.unwrap();
+            client.write_u16(SocketDataType::MatchSettings as u16).await?;
+            client.write_u16(match_settings_flat.len() as u16).await?;
+            client.write_all(&match_settings_flat).await?;
         }
         SocketDataType::StartCommand => {
-            let start_command = flatbuffers::root::<flat::StartCommand>(buffer).unwrap().unpack();
+            let start_command = root::<flat::StartCommand>(buffer).unwrap().unpack();
             let match_settings = parse_file_for_match_settings(start_command.config_path).await?;
 
-            tx.send(RustMessage::MatchSettings(match_settings)).await.unwrap();
+            tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
         }
         SocketDataType::StopCommand => {
-            let command = flatbuffers::root::<flat::StopCommand>(buffer).unwrap().unpack();
-            tx.send(RustMessage::StopCommand(command)).await.unwrap();
+            let command = root::<flat::StopCommand>(buffer).unwrap().unpack();
+            tx.send(messages::ToGame::StopCommand(command)).await.unwrap();
         }
         i => {
             println!("Received message type: {i:?}");
@@ -117,26 +129,23 @@ async fn handle_client_message(
 }
 
 async fn handle_game_message(
-    msg: RustMessage,
+    msg: messages::FromGame,
     client: &mut TcpStream,
     client_params: &mut Option<flat::ReadyMessageT>,
 ) -> IoResult<bool> {
     match msg {
-        RustMessage::None => {
+        messages::FromGame::None => {
             println!("Received None message type, closing connection");
             return Ok(false);
         }
-        RustMessage::GameTickPacket(packet) => {
-            let Some(params) = client_params.as_ref() else {
+        messages::FromGame::GameTickPacket(packet) => {
+            if client_params.is_none() {
                 return Ok(true);
-            };
+            }
 
             client.write_u16(SocketDataType::GameTickPacket as u16).await?;
             client.write_u16(packet.len() as u16).await?;
             client.write_all(&packet).await?;
-        }
-        i => {
-            println!("Received message type: {i:?}");
         }
     }
 

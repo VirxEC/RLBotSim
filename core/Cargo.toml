@@ -1,5 +1,5 @@
 [package]
-name = "rlbot_core_types"
+name = "rlbot_sockets"
 version = "0.1.0"
 edition = "2021"
 

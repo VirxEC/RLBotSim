@@ -53,21 +53,3 @@ impl From<u16> for SocketDataType {
         SocketDataType::from_u16(data_type)
     }
 }
-
-#[derive(Clone, Debug)]
-pub enum RustMessage {
-    None,
-    GameTickPacket(Box<[u8]>),
-    FieldInfo(flat::FieldInfoT),
-    // StartCommand(flat::StartCommandT),
-    MatchSettings(flat::MatchSettingsT),
-    PlayerInput(flat::PlayerInputT),
-    DesiredGameState(flat::DesiredGameStateT),
-    RenderGroup(flat::RenderGroupT),
-    RemoveRenderGroup(flat::RemoveRenderGroupT),
-    // QuickChat,
-    // BallPrediction,
-    // ReadyMessage(flat::ReadyMessageT),
-    MessagePacket(flat::MessagePacketT),
-    StopCommand(flat::StopCommandT),
-}
