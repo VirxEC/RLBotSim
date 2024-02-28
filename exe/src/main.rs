@@ -5,7 +5,7 @@ mod messages;
 mod parse;
 mod util;
 
-use parse::parse_file_for_match_settings;
+use parse::file_to_match_settings;
 use rlbot_sockets::{flat, flatbuffers::root, SocketDataType};
 use std::thread;
 use tokio::{
@@ -62,7 +62,7 @@ async fn handle_connection(
                 }
             }
             Ok(msg) = rx.recv() => {
-                if !handle_game_message(msg, &mut client, &mut client_params).await? {
+                if !handle_game_message(msg, &mut client, client_params.as_ref()).await? {
                     break;
                 }
             }
@@ -109,10 +109,18 @@ async fn handle_client_message(
             client.write_u16(SocketDataType::MatchSettings as u16).await?;
             client.write_u16(match_settings_flat.len() as u16).await?;
             client.write_all(&match_settings_flat).await?;
+
+            let (field_info_tx, field_info_rx) = oneshot::channel();
+            tx.send(messages::ToGame::FieldInfoRequest(field_info_tx)).await.unwrap();
+
+            let field_info_flat = field_info_rx.await.unwrap();
+            client.write_u16(SocketDataType::FieldInfo as u16).await?;
+            client.write_u16(field_info_flat.len() as u16).await?;
+            client.write_all(&field_info_flat).await?;
         }
         SocketDataType::StartCommand => {
             let start_command = root::<flat::StartCommand>(buffer).unwrap().unpack();
-            let match_settings = parse_file_for_match_settings(start_command.config_path).await?;
+            let match_settings = file_to_match_settings(start_command.config_path).await?;
 
             tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
         }
@@ -131,7 +139,7 @@ async fn handle_client_message(
 async fn handle_game_message(
     msg: messages::FromGame,
     client: &mut TcpStream,
-    client_params: &mut Option<flat::ReadyMessageT>,
+    client_params: Option<&flat::ReadyMessageT>,
 ) -> IoResult<bool> {
     match msg {
         messages::FromGame::None => {

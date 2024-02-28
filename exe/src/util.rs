@@ -7,9 +7,6 @@ pub fn auto_start_bots(match_settings: &flat::MatchSettingsT) -> IoResult<()> {
     }
 
     for player in &match_settings.player_configurations {
-        dbg!(&player.name);
-        dbg!(player.spawn_id);
-
         let parts = shlex::split(&player.run_command).unwrap();
 
         let mut command = Command::new(&parts[0]);

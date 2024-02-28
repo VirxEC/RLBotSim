@@ -12,3 +12,6 @@ rlbot_sockets = { path = "../core" }
 thiserror = "1.0.57"
 toml = "0.8.10"
 shlex = "1.3.0"
+
+[lints.clippy]
+all = "warn"
