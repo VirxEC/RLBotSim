@@ -6,7 +6,7 @@ pub enum ToGame {
     FieldInfoRequest(oneshot::Sender<Box<[u8]>>),
     MatchSettingsRequest(oneshot::Sender<Box<[u8]>>),
     MatchSettings(flat::MatchSettingsT),
-    // PlayerInput(flat::PlayerInputT),
+    PlayerInput(flat::PlayerInputT),
     // DesiredGameState(flat::DesiredGameStateT),
     // RenderGroup(flat::RenderGroupT),
     // RemoveRenderGroup(flat::RemoveRenderGroupT),

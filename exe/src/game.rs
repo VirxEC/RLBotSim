@@ -1,9 +1,17 @@
-use rlbot_sockets::{
-    flat::{self, CollisionShapeT},
-    flatbuffers::FlatBufferBuilder,
+use rlbot_sockets::{flat, flatbuffers::FlatBufferBuilder};
+use rocketsim_rs::{
+    bytes::ToBytes,
+    cxx::UniquePtr,
+    init,
+    math::Angle,
+    sim::{Arena, CarConfig, CarControls, Team},
+    GameState,
 };
-use rocketsim_rs::{bytes::ToBytes, cxx::UniquePtr, init, sim::Arena, GameState};
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU32, Ordering},
+    time::Duration,
+};
 use tokio::{
     sync::{broadcast, mpsc},
     time::interval,
@@ -11,15 +19,21 @@ use tokio::{
 
 use crate::{messages, util};
 
-const GAME_TPS: f32 = 1. / 120.;
+const GAME_TPS: u8 = 120;
+const GAME_DT: f32 = 1. / GAME_TPS as f32;
+
+static BLUE_SCORE: AtomicU32 = AtomicU32::new(0);
+static ORANGE_SCORE: AtomicU32 = AtomicU32::new(0);
 
 struct Game<'a> {
     arena: UniquePtr<Arena>,
     tx: broadcast::Sender<messages::FromGame>,
     flat_builder: FlatBufferBuilder<'a>,
     state_type: flat::GameStateType,
+    countdown_end_tick: u64,
     match_settings: Option<(flat::MatchSettingsT, Box<[u8]>)>,
     field_info: Option<Box<[u8]>>,
+    extra_car_info: HashMap<usize, (String, u32, i32), ahash::RandomState>,
 }
 
 impl<'a> Game<'a> {
@@ -29,8 +43,10 @@ impl<'a> Game<'a> {
             arena: Arena::default_standard(),
             flat_builder: FlatBufferBuilder::with_capacity(10240),
             state_type: flat::GameStateType::Inactive,
+            countdown_end_tick: 0,
             match_settings: None,
             field_info: None,
+            extra_car_info: HashMap::default(),
         }
     }
 
@@ -47,11 +63,27 @@ impl<'a> Game<'a> {
                 }
             }
             messages::ToGame::MatchSettings(match_settings) => {
-                self.state_type = flat::GameStateType::Active;
+                self.state_type = flat::GameStateType::Countdown;
+                self.countdown_end_tick = self.arena.get_tick_count() + 3 * GAME_TPS as u64;
 
                 util::auto_start_bots(&match_settings).unwrap();
                 self.set_match_settings(match_settings);
                 self.set_field_info();
+            }
+            messages::ToGame::PlayerInput(input) => {
+                let car_id = self.extra_car_info[&(input.player_index as usize)].1;
+                let car_controls = CarControls {
+                    throttle: input.controller_state.throttle,
+                    steer: input.controller_state.steer,
+                    pitch: input.controller_state.pitch,
+                    yaw: input.controller_state.yaw,
+                    roll: input.controller_state.roll,
+                    boost: input.controller_state.boost,
+                    jump: input.controller_state.jump,
+                    handbrake: input.controller_state.handbrake,
+                };
+
+                self.arena.pin_mut().set_car_controls(car_id, car_controls).unwrap();
             }
             messages::ToGame::StopCommand(info) => {
                 self.state_type = flat::GameStateType::Ended;
@@ -68,6 +100,46 @@ impl<'a> Game<'a> {
     }
 
     fn set_match_settings(&mut self, match_settings: flat::MatchSettingsT) {
+        self.arena = match match_settings.game_mode {
+            flat::GameMode::Soccer => Arena::default_standard(),
+            flat::GameMode::Hoops => Arena::default_hoops(),
+            flat::GameMode::Heatseeker => Arena::default_heatseeker(),
+            // flat::GameMode::Hockey => Arena::default_snowday(),
+            _ => unimplemented!(),
+        };
+
+        self.arena.pin_mut().set_goal_scored_callback(
+            |arena, car_team, _| {
+                match car_team {
+                    Team::BLUE => {
+                        BLUE_SCORE.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Team::ORANGE => {
+                        ORANGE_SCORE.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+
+                arena.reset_to_random_kickoff(None);
+            },
+            0,
+        );
+
+        self.extra_car_info.clear();
+
+        for (i, player) in match_settings.player_configurations.iter().enumerate() {
+            let team = match player.team {
+                0 => Team::BLUE,
+                1 => Team::ORANGE,
+                _ => unreachable!(),
+            };
+
+            let car_config = CarConfig::octane();
+            let car_id = self.arena.pin_mut().add_car(team, car_config);
+            self.extra_car_info.insert(i, (player.name.clone(), car_id, player.spawn_id));
+        }
+
+        self.arena.pin_mut().reset_to_random_kickoff(None);
+
         self.flat_builder.reset();
         let offset = match_settings.pack(&mut self.flat_builder);
         self.flat_builder.finish(offset, None);
@@ -128,7 +200,27 @@ impl<'a> Game<'a> {
     }
 
     fn advance_game(&mut self) {
-        if self.state_type == flat::GameStateType::Active || self.state_type == flat::GameStateType::Kickoff {
+        if self.state_type == flat::GameStateType::Countdown {
+            if self.countdown_end_tick <= self.arena.get_tick_count() {
+                self.state_type = flat::GameStateType::Kickoff
+            }
+        } else if self.state_type == flat::GameStateType::Kickoff {
+            // check and see if the last touch was after the countdown, then advance to "active"
+            for car_id in self.arena.pin_mut().get_cars() {
+                let state = self.arena.pin_mut().get_car(car_id);
+
+                if !state.ball_hit_info.is_valid {
+                    continue;
+                }
+
+                if state.ball_hit_info.tick_count_when_hit > self.countdown_end_tick {
+                    self.state_type = flat::GameStateType::Active;
+                    break;
+                }
+            }
+
+            self.arena.pin_mut().step(1);
+        } else if self.state_type == flat::GameStateType::Active {
             self.arena.pin_mut().step(1);
         }
 
@@ -150,13 +242,79 @@ impl<'a> Game<'a> {
     fn make_game_tick_packet(&self, game_state: &GameState) -> flat::GameTickPacketT {
         let mut packet = flat::GameTickPacketT::default();
 
-        let mut sphere_shape: Box<flat::SphereShapeT> = Box::default();
-        sphere_shape.diameter = 91.25 * 2.;
-        packet.ball.shape = CollisionShapeT::SphereShape(sphere_shape);
-
-        packet.game_info.seconds_elapsed = game_state.tick_count as f32 * GAME_TPS;
+        // Misc
+        packet.game_info.seconds_elapsed = game_state.tick_count as f32 * GAME_DT;
         packet.game_info.frame_num = game_state.tick_count as u32;
         packet.game_info.game_state_type = self.state_type;
+
+        // Ball
+        packet.ball.physics.location = flat::Vector3T {
+            x: game_state.ball.pos.x,
+            y: game_state.ball.pos.y,
+            z: game_state.ball.pos.z,
+        };
+        packet.ball.physics.velocity = flat::Vector3T {
+            x: game_state.ball.vel.x,
+            y: game_state.ball.vel.y,
+            z: game_state.ball.vel.z,
+        };
+        packet.ball.physics.angular_velocity = flat::Vector3T {
+            x: game_state.ball.ang_vel.x,
+            y: game_state.ball.ang_vel.y,
+            z: game_state.ball.ang_vel.z,
+        };
+
+        let rot = Angle::from_rotmat(game_state.ball.rot_mat);
+        packet.ball.physics.rotation = flat::RotatorT {
+            pitch: rot.pitch,
+            yaw: rot.yaw,
+            roll: rot.roll,
+        };
+
+        let mut sphere_shape: Box<flat::SphereShapeT> = Box::default();
+        sphere_shape.diameter = self.arena.get_ball_radius() * 2.;
+        packet.ball.shape = flat::CollisionShapeT::SphereShape(sphere_shape);
+
+        // Cars
+        let mut i = 0;
+        packet.players.reserve(self.extra_car_info.len());
+        while let Some((name, car_id, spawn_id)) = self.extra_car_info.get(&i).map(Clone::clone) {
+            let car = game_state.cars.iter().find(|car| car.id == car_id).unwrap();
+
+            let mut player = flat::PlayerInfoT::default();
+
+            player.physics.location = flat::Vector3T {
+                x: car.state.pos.x,
+                y: car.state.pos.y,
+                z: car.state.pos.z,
+            };
+            player.physics.velocity = flat::Vector3T {
+                x: car.state.vel.x,
+                y: car.state.vel.y,
+                z: car.state.vel.z,
+            };
+            player.physics.angular_velocity = flat::Vector3T {
+                x: car.state.ang_vel.x,
+                y: car.state.ang_vel.y,
+                z: car.state.ang_vel.z,
+            };
+
+            let rot = Angle::from_rotmat(car.state.rot_mat);
+            player.physics.rotation = flat::RotatorT {
+                pitch: rot.pitch,
+                yaw: rot.yaw,
+                roll: rot.roll,
+            };
+
+            player.team = car.team as u32;
+            player.spawn_id = spawn_id;
+            player.is_bot = true;
+            player.name = name;
+            player.boost = car.state.boost as u32;
+
+            packet.players.push(player);
+            i += 1;
+        }
 
         packet
     }
@@ -170,7 +328,7 @@ pub async fn run_rl(
 ) {
     init(None);
 
-    let mut interval = interval(Duration::from_secs_f32(GAME_TPS));
+    let mut interval = interval(Duration::from_secs_f32(GAME_DT));
     let mut game = Game::new(tx);
 
     loop {

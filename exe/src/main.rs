@@ -32,10 +32,9 @@ async fn main() -> IoResult<()> {
 
     loop {
         tokio::select! {
-            Ok((stream, _)) = tcp_connection.accept() => {
-                let tx_2 = tx.clone();
-                let rx = game_tx_hold.subscribe();
-                tokio::spawn(async move { handle_connection(stream, tx_2, rx).await });
+            Ok((client, _)) = tcp_connection.accept() => {
+                let client_session = ClientSession::new(client, tx.clone(), game_tx_hold.subscribe());
+                tokio::spawn(async move { client_session.handle_connection().await });
             }
             _ = shutdown_receiver.recv() => {
                 break;
@@ -46,116 +45,132 @@ async fn main() -> IoResult<()> {
     Ok(())
 }
 
-async fn handle_connection(
-    mut client: TcpStream,
+struct ClientSession {
+    client: TcpStream,
     tx: mpsc::Sender<messages::ToGame>,
-    mut rx: broadcast::Receiver<messages::FromGame>,
-) -> IoResult<()> {
-    let mut client_params = None;
-    let mut buffer = Vec::with_capacity(512);
-
-    loop {
-        tokio::select! {
-            Ok(data_type) = client.read_u16() => {
-                if !handle_client_message(data_type, &mut client, &tx, &mut buffer, &mut client_params).await? {
-                    break;
-                }
-            }
-            Ok(msg) = rx.recv() => {
-                if !handle_game_message(msg, &mut client, client_params.as_ref()).await? {
-                    break;
-                }
-            }
-            else => break,
-        }
-    }
-
-    println!("Client exiting loop and closing connection");
-
-    Ok(())
+    rx: broadcast::Receiver<messages::FromGame>,
+    client_params: Option<flat::ReadyMessageT>,
+    buffer: Vec<u8>,
 }
 
-async fn handle_client_message(
-    data_type: u16,
-    client: &mut TcpStream,
-    tx: &mpsc::Sender<messages::ToGame>,
-    buffer: &mut Vec<u8>,
-    client_params: &mut Option<flat::ReadyMessageT>,
-) -> IoResult<bool> {
-    let size = client.read_u16().await?;
-
-    buffer.resize(usize::from(size), 0);
-    client.read_exact(buffer).await?;
-
-    match SocketDataType::from_u16(data_type) {
-        SocketDataType::None => {
-            println!("Received None message type, closing connection");
-            return Ok(false);
-        }
-        SocketDataType::MatchSettings => {
-            let match_settings = root::<flat::MatchSettings>(buffer).unwrap().unpack();
-            tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
-        }
-        SocketDataType::ReadyMessage => {
-            let ready_message = root::<flat::ReadyMessage>(buffer).unwrap().unpack();
-            client_params.replace(ready_message);
-
-            let (match_settings_tx, match_settings_rx) = oneshot::channel();
-            tx.send(messages::ToGame::MatchSettingsRequest(match_settings_tx))
-                .await
-                .unwrap();
-
-            let match_settings_flat = match_settings_rx.await.unwrap();
-            client.write_u16(SocketDataType::MatchSettings as u16).await?;
-            client.write_u16(match_settings_flat.len() as u16).await?;
-            client.write_all(&match_settings_flat).await?;
-
-            let (field_info_tx, field_info_rx) = oneshot::channel();
-            tx.send(messages::ToGame::FieldInfoRequest(field_info_tx)).await.unwrap();
-
-            let field_info_flat = field_info_rx.await.unwrap();
-            client.write_u16(SocketDataType::FieldInfo as u16).await?;
-            client.write_u16(field_info_flat.len() as u16).await?;
-            client.write_all(&field_info_flat).await?;
-        }
-        SocketDataType::StartCommand => {
-            let start_command = root::<flat::StartCommand>(buffer).unwrap().unpack();
-            let match_settings = file_to_match_settings(start_command.config_path).await?;
-
-            tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
-        }
-        SocketDataType::StopCommand => {
-            let command = root::<flat::StopCommand>(buffer).unwrap().unpack();
-            tx.send(messages::ToGame::StopCommand(command)).await.unwrap();
-        }
-        i => {
-            println!("Received message type: {i:?}");
+impl ClientSession {
+    fn new(client: TcpStream, tx: mpsc::Sender<messages::ToGame>, rx: broadcast::Receiver<messages::FromGame>) -> Self {
+        Self {
+            client,
+            tx,
+            rx,
+            client_params: None,
+            buffer: Vec::with_capacity(512),
         }
     }
 
-    Ok(true)
-}
-
-async fn handle_game_message(
-    msg: messages::FromGame,
-    client: &mut TcpStream,
-    client_params: Option<&flat::ReadyMessageT>,
-) -> IoResult<bool> {
-    match msg {
-        messages::FromGame::None => {
-            println!("Received None message type, closing connection");
-            return Ok(false);
-        }
-        messages::FromGame::GameTickPacket(packet) => {
-            if client_params.is_none() {
-                return Ok(true);
+    async fn handle_connection(mut self) -> IoResult<()> {
+        loop {
+            tokio::select! {
+                Ok(data_type) = self.client.read_u16() => {
+                    if !self.handle_client_message(data_type).await? {
+                        break;
+                    }
+                }
+                Ok(msg) = self.rx.recv() => {
+                    if !self.handle_game_message(msg).await? {
+                        break;
+                    }
+                }
+                else => break,
             }
-
-            client.write_u16(SocketDataType::GameTickPacket as u16).await?;
-            client.write_u16(packet.len() as u16).await?;
-            client.write_all(&packet).await?;
         }
+
+        println!("Client exiting loop and closing connection");
+        self.buffered_send_flat(SocketDataType::None, &[1]).await?;
+
+        Ok(())
     }
 
-    Ok(true)
+    async fn buffered_send_flat(&mut self, data_type: SocketDataType, flat: &[u8]) -> IoResult<()> {
+        self.buffer.clear();
+        self.buffer.reserve(4 + flat.len());
+        self.buffer.write_u16(data_type as u16).await?;
+        self.buffer.write_u16(flat.len() as u16).await?;
+        self.buffer.write_all(flat).await?;
+
+        self.client.write_all(&self.buffer).await?;
+        self.client.flush().await?;
+        Ok(())
+    }
+
+    async fn handle_client_message(&mut self, data_type: u16) -> IoResult<bool> {
+        let size = self.client.read_u16().await?;
+
+        self.buffer.resize(usize::from(size), 0);
+        self.client.read_exact(&mut self.buffer).await?;
+
+        match SocketDataType::from_u16(data_type) {
+            SocketDataType::None => {
+                println!("Received None message type, closing connection");
+                return Ok(false);
+            }
+            SocketDataType::MatchSettings => {
+                let match_settings = root::<flat::MatchSettings>(&self.buffer).unwrap().unpack();
+                self.tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
+            }
+            SocketDataType::ReadyMessage => {
+                let ready_message = root::<flat::ReadyMessage>(&self.buffer).unwrap().unpack();
+                self.client_params.replace(ready_message);
+
+                let (match_settings_tx, match_settings_rx) = oneshot::channel();
+                self.tx
+                    .send(messages::ToGame::MatchSettingsRequest(match_settings_tx))
+                    .await
+                    .unwrap();
+
+                let match_settings_flat = match_settings_rx.await.unwrap();
+                self.buffered_send_flat(SocketDataType::MatchSettings, &match_settings_flat)
+                    .await?;
+
+                let (field_info_tx, field_info_rx) = oneshot::channel();
+                self.tx.send(messages::ToGame::FieldInfoRequest(field_info_tx)).await.unwrap();
+
+                let field_info_flat = field_info_rx.await.unwrap();
+                self.buffered_send_flat(SocketDataType::FieldInfo, &field_info_flat).await?;
+            }
+            SocketDataType::StartCommand => {
+                let start_command = root::<flat::StartCommand>(&self.buffer).unwrap().unpack();
+                let match_settings = file_to_match_settings(start_command.config_path).await?;
+
+                self.tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
+            }
+            SocketDataType::PlayerInput => {
+                let input = root::<flat::PlayerInput>(&self.buffer).unwrap().unpack();
+                self.tx.send(messages::ToGame::PlayerInput(input)).await.unwrap();
+            }
+            SocketDataType::StopCommand => {
+                let command = root::<flat::StopCommand>(&self.buffer).unwrap().unpack();
+                self.tx.send(messages::ToGame::StopCommand(command)).await.unwrap();
+            }
+            i => {
+                println!("Received message type: {i:?}");
+            }
+        }
+
+        Ok(true)
+    }
+
+    async fn handle_game_message(&mut self, msg: messages::FromGame) -> IoResult<bool> {
+        match msg {
+            messages::FromGame::None => {
+                println!("Received None message type, closing connection");
+                return Ok(false);
+            }
+            messages::FromGame::GameTickPacket(packet) => {
+                if self.client_params.is_none() {
+                    return Ok(true);
+                }
+
+                self.buffered_send_flat(SocketDataType::GameTickPacket, &packet).await?;
+            }
+        }
+
+        Ok(true)
+    }
 }
