@@ -9,7 +9,7 @@ use rocketsim_rs::{
 use std::{
     collections::HashMap,
     io::Result as IoResult,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
     time::Duration,
 };
 use tokio::{
@@ -24,6 +24,7 @@ const GAME_DT: f32 = 1. / GAME_TPS as f32;
 
 static BLUE_SCORE: AtomicU32 = AtomicU32::new(0);
 static ORANGE_SCORE: AtomicU32 = AtomicU32::new(0);
+static NEEDS_RESET: AtomicBool = AtomicBool::new(false);
 
 struct Game<'a> {
     arena: UniquePtr<Arena>,
@@ -50,6 +51,11 @@ impl<'a> Game<'a> {
         }
     }
 
+    fn set_state_to_countdown(&mut self) {
+        self.state_type = flat::GameStateType::Countdown;
+        self.countdown_end_tick = self.arena.get_tick_count() + 3 * GAME_TPS as u64;
+    }
+
     fn handle_message_from_client(&mut self, msg: messages::ToGame) -> IoResult<bool> {
         match msg {
             messages::ToGame::FieldInfoRequest(sender) => {
@@ -63,9 +69,7 @@ impl<'a> Game<'a> {
                 }
             }
             messages::ToGame::MatchSettings(match_settings) => {
-                self.state_type = flat::GameStateType::Countdown;
-                self.countdown_end_tick = self.arena.get_tick_count() + 3 * GAME_TPS as u64;
-
+                self.set_state_to_countdown();
                 util::auto_start_bots(&match_settings)?;
                 self.set_match_settings(match_settings);
                 self.set_field_info();
@@ -114,6 +118,8 @@ impl<'a> Game<'a> {
 
         self.arena.pin_mut().set_goal_scored_callback(
             |arena, car_team, _| {
+                NEEDS_RESET.store(true, Ordering::Relaxed);
+
                 match car_team {
                     Team::BLUE => {
                         BLUE_SCORE.fetch_add(1, Ordering::Relaxed);
@@ -204,8 +210,20 @@ impl<'a> Game<'a> {
     }
 
     fn advance_state(&mut self) -> GameState {
+        if NEEDS_RESET.load(Ordering::Relaxed) {
+            NEEDS_RESET.store(false, Ordering::Relaxed);
+            self.set_state_to_countdown();
+        }
+
         if self.state_type == flat::GameStateType::Countdown {
+            let ticks_remaining = self.countdown_end_tick - self.arena.get_tick_count();
+            if ticks_remaining % 120 == 0 {
+                println!("Starting in {}s", ticks_remaining / 120);
+            }
+
+            self.countdown_end_tick -= 1;
             if self.countdown_end_tick <= self.arena.get_tick_count() {
+                println!("Kickoff!");
                 self.state_type = flat::GameStateType::Kickoff
             }
         } else if self.state_type == flat::GameStateType::Kickoff {
@@ -218,6 +236,7 @@ impl<'a> Game<'a> {
                 }
 
                 if state.ball_hit_info.tick_count_when_hit > self.countdown_end_tick {
+                    println!("Ball touched, game is now active");
                     self.state_type = flat::GameStateType::Active;
                     break;
                 }
