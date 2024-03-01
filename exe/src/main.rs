@@ -4,10 +4,11 @@ mod game;
 mod messages;
 mod parse;
 mod util;
+mod viser;
 
 use parse::file_to_match_settings;
 use rlbot_sockets::{flat, flatbuffers::root, SocketDataType};
-use std::thread;
+use std::{env::args, thread};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Result as IoResult},
     net::{TcpListener, TcpStream},
@@ -19,12 +20,15 @@ const DEFAULT_ADDRESS: &str = "127.0.0.1";
 
 #[tokio::main]
 async fn main() -> IoResult<()> {
+    let args = args().skip(1).collect::<Vec<_>>();
+    let headless = args.contains(&"--no-rlviser".to_string());
+
     let (game_tx_hold, _) = broadcast::channel(255);
     let (tx, game_rx) = mpsc::channel(255);
     let (shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
 
     let game_tx = game_tx_hold.clone();
-    thread::spawn(move || game::run_rl(game_tx, game_rx, shutdown_sender));
+    thread::spawn(move || game::run_rl(game_tx, game_rx, shutdown_sender, headless));
 
     let tcp_connection = TcpListener::bind(format!("{DEFAULT_ADDRESS}:{RLBOT_SOCKETS_PORT}")).await?;
 
@@ -60,7 +64,7 @@ impl ClientSession {
             tx,
             rx,
             client_params: None,
-            buffer: Vec::with_capacity(512),
+            buffer: Vec::with_capacity(1024),
         }
     }
 
@@ -90,9 +94,11 @@ impl ClientSession {
     async fn buffered_send_flat(&mut self, data_type: SocketDataType, flat: &[u8]) -> IoResult<()> {
         self.buffer.clear();
         self.buffer.reserve(4 + flat.len());
-        self.buffer.write_u16(data_type as u16).await?;
-        self.buffer.write_u16(flat.len() as u16).await?;
-        self.buffer.write_all(flat).await?;
+
+        self.buffer.extend_from_slice(&(data_type as u16).to_be_bytes());
+        assert!(flat.len() <= u16::MAX as usize, "Flatbuffer too large");
+        self.buffer.extend_from_slice(&(flat.len() as u16).to_be_bytes());
+        self.buffer.extend_from_slice(flat);
 
         self.client.write_all(&self.buffer).await?;
         self.client.flush().await?;

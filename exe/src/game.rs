@@ -1,6 +1,5 @@
 use rlbot_sockets::{flat, flatbuffers::FlatBufferBuilder};
 use rocketsim_rs::{
-    bytes::ToBytes,
     cxx::UniquePtr,
     init,
     math::Angle,
@@ -9,15 +8,16 @@ use rocketsim_rs::{
 };
 use std::{
     collections::HashMap,
+    io::Result as IoResult,
     sync::atomic::{AtomicU32, Ordering},
     time::Duration,
 };
 use tokio::{
     sync::{broadcast, mpsc},
-    time::interval,
+    time::{interval, Interval},
 };
 
-use crate::{messages, util};
+use crate::{messages, util, viser};
 
 const GAME_TPS: u8 = 120;
 const GAME_DT: f32 = 1. / GAME_TPS as f32;
@@ -50,7 +50,7 @@ impl<'a> Game<'a> {
         }
     }
 
-    fn handle_message_from_client(&mut self, msg: messages::ToGame) -> bool {
+    fn handle_message_from_client(&mut self, msg: messages::ToGame) -> IoResult<bool> {
         match msg {
             messages::ToGame::FieldInfoRequest(sender) => {
                 if let Some(field_info) = &self.field_info {
@@ -66,7 +66,7 @@ impl<'a> Game<'a> {
                 self.state_type = flat::GameStateType::Countdown;
                 self.countdown_end_tick = self.arena.get_tick_count() + 3 * GAME_TPS as u64;
 
-                util::auto_start_bots(&match_settings).unwrap();
+                util::auto_start_bots(&match_settings)?;
                 self.set_match_settings(match_settings);
                 self.set_field_info();
             }
@@ -91,12 +91,16 @@ impl<'a> Game<'a> {
                 self.tx.send(messages::FromGame::None).unwrap();
 
                 if info.shutdown_server {
-                    return false;
+                    return Ok(false);
                 }
             }
         }
 
-        true
+        Ok(true)
+    }
+
+    fn set_state(&mut self, game_state: &GameState) {
+        self.arena.pin_mut().set_game_state(game_state).unwrap();
     }
 
     fn set_match_settings(&mut self, match_settings: flat::MatchSettingsT) {
@@ -199,7 +203,7 @@ impl<'a> Game<'a> {
         self.field_info = Some(bytes.into());
     }
 
-    fn advance_game(&mut self) {
+    fn advance_state(&mut self) -> GameState {
         if self.state_type == flat::GameStateType::Countdown {
             if self.countdown_end_tick <= self.arena.get_tick_count() {
                 self.state_type = flat::GameStateType::Kickoff
@@ -225,8 +229,6 @@ impl<'a> Game<'a> {
         }
 
         let game_state = self.arena.pin_mut().get_game_state();
-        let _bytes = game_state.to_bytes();
-        // TODO: RLViser stuff
 
         // construct and send out game tick packet
         let packet = self.make_game_tick_packet(&game_state);
@@ -237,6 +239,8 @@ impl<'a> Game<'a> {
         let bytes = self.flat_builder.finished_data();
 
         let _ = self.tx.send(messages::FromGame::GameTickPacket(bytes.into()));
+
+        game_state
     }
 
     fn make_game_tick_packet(&self, game_state: &GameState) -> flat::GameTickPacketT {
@@ -323,28 +327,66 @@ impl<'a> Game<'a> {
 #[tokio::main]
 pub async fn run_rl(
     tx: broadcast::Sender<messages::FromGame>,
-    mut rx: mpsc::Receiver<messages::ToGame>,
+    rx: mpsc::Receiver<messages::ToGame>,
     shutdown_sender: mpsc::Sender<()>,
+    headless: bool,
 ) {
     init(None);
 
-    let mut interval = interval(Duration::from_secs_f32(GAME_DT));
-    let mut game = Game::new(tx);
+    let interval = interval(Duration::from_secs_f32(GAME_DT));
+    let game = Game::new(tx);
+
+    if headless {
+        run_headless(interval, game, rx).await;
+    } else {
+        run_with_rlviser(interval, game, rx).await;
+    }
+
+    println!("Shutting down RocketSim");
+    shutdown_sender.send(()).await.unwrap();
+}
+
+async fn run_with_rlviser(mut interval: Interval, mut game: Game<'_>, mut rx: mpsc::Receiver<messages::ToGame>) {
+    let mut rlviser = viser::ExternalManager::new().await.unwrap();
 
     loop {
         tokio::select! {
+            Ok(game_state) = rlviser.check_for_messages() => {
+                if let Some(game_state) = game_state {
+                    game.set_state(&game_state);
+                }
+            }
+            // modifications below should also be made to the `run_headless` function
             Some(msg) = rx.recv() => {
-                if !game.handle_message_from_client(msg) {
+                if !game.handle_message_from_client(msg).unwrap() {
                     break;
                 }
             }
             // make tokio timer that goes off 120 times per second
             // every time it goes off, send a game tick packet to the client
-            _ = interval.tick() => game.advance_game(),
+            _ = interval.tick() => {
+                let game_state = game.advance_state();
+                rlviser.send_game_state(&game_state).await.unwrap();
+            },
             else => break,
         }
     }
 
-    println!("Shutting down RocketSim");
-    shutdown_sender.send(()).await.unwrap();
+    rlviser.close().await.unwrap();
+}
+
+async fn run_headless(mut interval: Interval, mut game: Game<'_>, mut rx: mpsc::Receiver<messages::ToGame>) {
+    loop {
+        tokio::select! {
+            Some(msg) = rx.recv() => {
+                if !game.handle_message_from_client(msg).unwrap() {
+                    break;
+                }
+            }
+            _ = interval.tick() => {
+                game.advance_state();
+            }
+            else => break,
+        }
+    }
 }
