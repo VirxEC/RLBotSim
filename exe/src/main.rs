@@ -36,6 +36,7 @@ async fn main() -> IoResult<()> {
 
     loop {
         tokio::select! {
+            biased;
             Ok((client, _)) = tcp_connection.accept() => {
                 let client_session = ClientSession::new(client, tx.clone(), game_tx_hold.subscribe());
                 tokio::spawn(async move { client_session.handle_connection().await });
@@ -130,21 +131,29 @@ impl ClientSession {
                     .await
                     .unwrap();
 
-                let match_settings_flat = match_settings_rx.await.unwrap();
-                self.buffered_send_flat(SocketDataType::MatchSettings, &match_settings_flat)
-                    .await?;
+                if let Ok(match_settings_flat) = match_settings_rx.await {
+                    self.buffered_send_flat(SocketDataType::MatchSettings, &match_settings_flat)
+                        .await?;
+                }
 
                 let (field_info_tx, field_info_rx) = oneshot::channel();
                 self.tx.send(messages::ToGame::FieldInfoRequest(field_info_tx)).await.unwrap();
 
-                let field_info_flat = field_info_rx.await.unwrap();
-                self.buffered_send_flat(SocketDataType::FieldInfo, &field_info_flat).await?;
+                if let Ok(field_info_flat) = field_info_rx.await {
+                    self.buffered_send_flat(SocketDataType::FieldInfo, &field_info_flat).await?;
+                }
             }
             SocketDataType::StartCommand => {
                 let start_command = root::<flat::StartCommand>(&self.buffer).unwrap().unpack();
-                let match_settings = file_to_match_settings(start_command.config_path).await?;
 
-                self.tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
+                match file_to_match_settings(start_command.config_path).await {
+                    Ok(match_settings) => {
+                        self.tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
+                    }
+                    Err(e) => {
+                        println!("Error reading match settings: {e}");
+                    }
+                }
             }
             SocketDataType::PlayerInput => {
                 let input = root::<flat::PlayerInput>(&self.buffer).unwrap().unpack();
@@ -174,6 +183,12 @@ impl ClientSession {
                 }
 
                 self.buffered_send_flat(SocketDataType::GameTickPacket, &packet).await?;
+            }
+            messages::FromGame::MatchSettings(settings) => {
+                self.buffered_send_flat(SocketDataType::MatchSettings, &settings).await?;
+            }
+            messages::FromGame::FieldInfo(field) => {
+                self.buffered_send_flat(SocketDataType::FieldInfo, &field).await?;
             }
         }
 

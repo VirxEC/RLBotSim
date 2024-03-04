@@ -17,6 +17,8 @@ pub enum ToGame {
 pub enum FromGame {
     None,
     GameTickPacket(Box<[u8]>),
+    MatchSettings(Box<[u8]>),
+    FieldInfo(Box<[u8]>),
     // QuickChat,
     // BallPrediction,
     // MessagePacket(flat::MessagePacketT),

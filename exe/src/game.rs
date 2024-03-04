@@ -73,6 +73,16 @@ impl<'a> Game<'a> {
                 util::auto_start_bots(&match_settings)?;
                 self.set_match_settings(match_settings);
                 self.set_field_info();
+
+                if let Some((_, match_settings)) = &self.match_settings {
+                    self.tx
+                        .send(messages::FromGame::MatchSettings(match_settings.clone()))
+                        .unwrap();
+                }
+
+                if let Some(field_info) = &self.field_info {
+                    self.tx.send(messages::FromGame::FieldInfo(field_info.clone())).unwrap();
+                }
             }
             messages::ToGame::PlayerInput(input) => {
                 let car_id = self.extra_car_info[&(input.player_index as usize)].1;
@@ -343,7 +353,7 @@ impl<'a> Game<'a> {
     }
 }
 
-#[tokio::main]
+#[tokio::main(worker_threads = 2)]
 pub async fn run_rl(
     tx: broadcast::Sender<messages::FromGame>,
     rx: mpsc::Receiver<messages::ToGame>,
@@ -370,15 +380,15 @@ async fn run_with_rlviser(mut interval: Interval, mut game: Game<'_>, mut rx: mp
 
     loop {
         tokio::select! {
-            Ok(game_state) = rlviser.check_for_messages() => {
-                if let Some(game_state) = game_state {
-                    game.set_state(&game_state);
-                }
-            }
             // modifications below should also be made to the `run_headless` function
             Some(msg) = rx.recv() => {
                 if !game.handle_message_from_client(msg).unwrap() {
                     break;
+                }
+            }
+            Ok(game_state) = rlviser.check_for_messages() => {
+                if let Some(game_state) = game_state {
+                    game.set_state(&game_state);
                 }
             }
             // make tokio timer that goes off 120 times per second
