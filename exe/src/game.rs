@@ -1,5 +1,6 @@
 use rlbot_sockets::{flat, flatbuffers::FlatBufferBuilder};
 use rocketsim_rs::{
+    consts::DOUBLEJUMP_MAX_DELAY,
     cxx::UniquePtr,
     init,
     math::Angle,
@@ -276,9 +277,36 @@ impl<'a> Game<'a> {
         let mut packet = flat::GameTickPacketT::default();
 
         // Misc
+        packet.game_info.game_speed = 1.;
+        packet.game_info.is_unlimited_time = true;
+        packet.game_info.is_overtime = false;
+        packet.game_info.world_gravity_z = -650.;
         packet.game_info.seconds_elapsed = game_state.tick_count as f32 * GAME_DT;
         packet.game_info.frame_num = game_state.tick_count as u32;
         packet.game_info.game_state_type = self.state_type;
+
+        // teams
+        packet.teams.reserve(2);
+
+        let mut blue_team = flat::TeamInfoT::default();
+        blue_team.score = BLUE_SCORE.load(Ordering::Relaxed);
+        blue_team.team_index = 0;
+        packet.teams.push(blue_team);
+
+        let mut orange_team = flat::TeamInfoT::default();
+        orange_team.score = ORANGE_SCORE.load(Ordering::Relaxed);
+        orange_team.team_index = 1;
+        packet.teams.push(orange_team);
+
+        // boost pad states
+        packet.boost_pad_states.reserve(game_state.pads.len());
+
+        for pad in &game_state.pads {
+            let mut boost_pad_state = flat::BoostPadStateT::default();
+            boost_pad_state.is_active = pad.state.is_active;
+            boost_pad_state.timer = pad.state.cooldown;
+            packet.boost_pad_states.push(boost_pad_state);
+        }
 
         // Ball
         packet.ball.physics.location = flat::Vector3T {
@@ -307,6 +335,45 @@ impl<'a> Game<'a> {
         let mut sphere_shape: Box<flat::SphereShapeT> = Box::default();
         sphere_shape.diameter = self.arena.get_ball_radius() * 2.;
         packet.ball.shape = flat::CollisionShapeT::SphereShape(sphere_shape);
+
+        let mut last_ball_touch_time = 0;
+        let mut last_car = None;
+
+        for car in &game_state.cars {
+            if !car.state.ball_hit_info.is_valid {
+                continue;
+            }
+
+            if car.state.ball_hit_info.tick_count_when_hit > last_ball_touch_time {
+                last_car = Some(car);
+                last_ball_touch_time = car.state.ball_hit_info.tick_count_when_hit;
+            }
+        }
+
+        if let Some(car) = last_car {
+            packet.ball.latest_touch.location = flat::Vector3T {
+                x: car.state.ball_hit_info.relative_pos_on_ball.x + car.state.pos.x,
+                y: car.state.ball_hit_info.relative_pos_on_ball.y + car.state.pos.y,
+                z: car.state.ball_hit_info.relative_pos_on_ball.z + car.state.pos.z,
+            };
+            packet.ball.latest_touch.normal = flat::Vector3T {
+                x: car.state.ball_hit_info.extra_hit_vel.x,
+                y: car.state.ball_hit_info.extra_hit_vel.y,
+                z: car.state.ball_hit_info.extra_hit_vel.z,
+            };
+            packet.ball.latest_touch.game_seconds = last_ball_touch_time as f32 * GAME_DT;
+            packet.ball.latest_touch.team = car.team as u32;
+
+            let (&index, name, _) = self
+                .extra_car_info
+                .iter()
+                .map(|(index, (name, car_id, _))| (index, name, *car_id))
+                .find(|(_, _, car_id)| *car_id == car.id)
+                .unwrap();
+
+            packet.ball.latest_touch.player_index = index as u32;
+            packet.ball.latest_touch.player_name = name.clone();
+        }
 
         // Cars
         let mut i = 0;
@@ -344,6 +411,35 @@ impl<'a> Game<'a> {
             player.is_bot = true;
             player.name = name;
             player.boost = car.state.boost as u32;
+            player.is_supersonic =
+                (car.state.pos.x.powi(2) + car.state.pos.y.powi(2) + car.state.pos.z.powi(2)) > 2200f32.powi(2);
+
+            player.hitbox = Box::default();
+            player.hitbox.length = car.config.hitbox_size.x;
+            player.hitbox.width = car.config.hitbox_size.y;
+            player.hitbox.height = car.config.hitbox_size.z;
+
+            player.hitbox_offset = flat::Vector3T::default();
+            player.hitbox_offset.x = car.config.hitbox_pos_offset.x;
+            player.hitbox_offset.y = car.config.hitbox_pos_offset.y;
+            player.hitbox_offset.z = car.config.hitbox_pos_offset.z;
+
+            player.demolished_timeout = car.state.demo_respawn_timer;
+            player.dodge_timeout = DOUBLEJUMP_MAX_DELAY - car.state.air_time_since_jump;
+
+            player.air_state = if car.state.has_contact {
+                flat::AirState::OnGround
+            } else if car.state.is_jumping {
+                if car.state.has_jumped {
+                    flat::AirState::DoubleJumping
+                } else {
+                    flat::AirState::Jumping
+                }
+            } else if car.state.is_flipping {
+                flat::AirState::Dodging
+            } else {
+                flat::AirState::InAir
+            };
 
             packet.players.push(player);
             i += 1;
