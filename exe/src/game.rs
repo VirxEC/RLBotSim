@@ -3,7 +3,6 @@ use rocketsim_rs::{
     consts::DOUBLEJUMP_MAX_DELAY,
     cxx::UniquePtr,
     init,
-    math::Angle,
     sim::{Arena, CarConfig, CarControls, Team},
     GameState,
 };
@@ -18,7 +17,11 @@ use tokio::{
     time::{interval, Interval},
 };
 
-use crate::{messages, util, viser};
+use crate::{
+    messages,
+    util::{self, RsToFlat},
+    viser,
+};
 
 const GAME_TPS: u8 = 120;
 const GAME_DT: f32 = 1. / GAME_TPS as f32;
@@ -103,7 +106,7 @@ impl<'a> Game<'a> {
             messages::ToGame::StopCommand(info) => {
                 self.state_type = flat::GameStateType::Ended;
 
-                self.tx.send(messages::FromGame::None).unwrap();
+                self.tx.send(messages::FromGame::StopCommand(info.shutdown_server)).unwrap();
 
                 if info.shutdown_server {
                     return Ok(false);
@@ -235,7 +238,7 @@ impl<'a> Game<'a> {
             self.countdown_end_tick -= 1;
             if self.countdown_end_tick <= self.arena.get_tick_count() {
                 println!("Kickoff!");
-                self.state_type = flat::GameStateType::Kickoff
+                self.state_type = flat::GameStateType::Kickoff;
             }
         } else if self.state_type == flat::GameStateType::Kickoff {
             // check and see if the last touch was after the countdown, then advance to "active"
@@ -309,28 +312,10 @@ impl<'a> Game<'a> {
         }
 
         // Ball
-        packet.ball.physics.location = flat::Vector3T {
-            x: game_state.ball.pos.x,
-            y: game_state.ball.pos.y,
-            z: game_state.ball.pos.z,
-        };
-        packet.ball.physics.velocity = flat::Vector3T {
-            x: game_state.ball.vel.x,
-            y: game_state.ball.vel.y,
-            z: game_state.ball.vel.z,
-        };
-        packet.ball.physics.angular_velocity = flat::Vector3T {
-            x: game_state.ball.ang_vel.x,
-            y: game_state.ball.ang_vel.y,
-            z: game_state.ball.ang_vel.z,
-        };
-
-        let rot = Angle::from_rotmat(game_state.ball.rot_mat);
-        packet.ball.physics.rotation = flat::RotatorT {
-            pitch: rot.pitch,
-            yaw: rot.yaw,
-            roll: rot.roll,
-        };
+        packet.ball.physics.location = game_state.ball.pos.to_flat();
+        packet.ball.physics.velocity = game_state.ball.pos.to_flat();
+        packet.ball.physics.angular_velocity = game_state.ball.pos.to_flat();
+        packet.ball.physics.rotation = game_state.ball.rot_mat.to_flat();
 
         let mut sphere_shape: Box<flat::SphereShapeT> = Box::default();
         sphere_shape.diameter = self.arena.get_ball_radius() * 2.;
@@ -356,11 +341,7 @@ impl<'a> Game<'a> {
                 y: car.state.ball_hit_info.relative_pos_on_ball.y + car.state.pos.y,
                 z: car.state.ball_hit_info.relative_pos_on_ball.z + car.state.pos.z,
             };
-            packet.ball.latest_touch.normal = flat::Vector3T {
-                x: car.state.ball_hit_info.extra_hit_vel.x,
-                y: car.state.ball_hit_info.extra_hit_vel.y,
-                z: car.state.ball_hit_info.extra_hit_vel.z,
-            };
+            packet.ball.latest_touch.normal = car.state.ball_hit_info.extra_hit_vel.to_flat();
             packet.ball.latest_touch.game_seconds = last_ball_touch_time as f32 * GAME_DT;
             packet.ball.latest_touch.team = car.team as u32;
 
@@ -378,33 +359,15 @@ impl<'a> Game<'a> {
         // Cars
         let mut i = 0;
         packet.players.reserve(self.extra_car_info.len());
-        while let Some((name, car_id, spawn_id)) = self.extra_car_info.get(&i).map(Clone::clone) {
+        while let Some((name, car_id, spawn_id)) = self.extra_car_info.get(&i).cloned() {
             let car = game_state.cars.iter().find(|car| car.id == car_id).unwrap();
 
             let mut player = flat::PlayerInfoT::default();
 
-            player.physics.location = flat::Vector3T {
-                x: car.state.pos.x,
-                y: car.state.pos.y,
-                z: car.state.pos.z,
-            };
-            player.physics.velocity = flat::Vector3T {
-                x: car.state.vel.x,
-                y: car.state.vel.y,
-                z: car.state.vel.z,
-            };
-            player.physics.angular_velocity = flat::Vector3T {
-                x: car.state.ang_vel.x,
-                y: car.state.ang_vel.y,
-                z: car.state.ang_vel.z,
-            };
-
-            let rot = Angle::from_rotmat(car.state.rot_mat);
-            player.physics.rotation = flat::RotatorT {
-                pitch: rot.pitch,
-                yaw: rot.yaw,
-                roll: rot.roll,
-            };
+            player.physics.location = car.state.pos.to_flat();
+            player.physics.velocity = car.state.vel.to_flat();
+            player.physics.angular_velocity = car.state.ang_vel.to_flat();
+            player.physics.rotation = car.state.rot_mat.to_flat();
 
             player.team = car.team as u32;
             player.spawn_id = spawn_id;
@@ -414,15 +377,8 @@ impl<'a> Game<'a> {
             player.is_supersonic =
                 (car.state.pos.x.powi(2) + car.state.pos.y.powi(2) + car.state.pos.z.powi(2)) > 2200f32.powi(2);
 
-            player.hitbox = Box::default();
-            player.hitbox.length = car.config.hitbox_size.x;
-            player.hitbox.width = car.config.hitbox_size.y;
-            player.hitbox.height = car.config.hitbox_size.z;
-
-            player.hitbox_offset = flat::Vector3T::default();
-            player.hitbox_offset.x = car.config.hitbox_pos_offset.x;
-            player.hitbox_offset.y = car.config.hitbox_pos_offset.y;
-            player.hitbox_offset.z = car.config.hitbox_pos_offset.z;
+            player.hitbox = car.config.hitbox_size.to_flat();
+            player.hitbox_offset = car.config.hitbox_pos_offset.to_flat();
 
             player.demolished_timeout = car.state.demo_respawn_timer;
             player.dodge_timeout = DOUBLEJUMP_MAX_DELAY - car.state.air_time_since_jump;

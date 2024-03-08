@@ -15,7 +15,7 @@ pub enum ToGame {
 
 #[derive(Clone, Debug)]
 pub enum FromGame {
-    None,
+    StopCommand(bool),
     GameTickPacket(Box<[u8]>),
     MatchSettings(Box<[u8]>),
     FieldInfo(Box<[u8]>),

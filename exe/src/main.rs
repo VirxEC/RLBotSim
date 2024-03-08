@@ -20,8 +20,7 @@ const DEFAULT_ADDRESS: &str = "127.0.0.1";
 
 #[tokio::main]
 async fn main() -> IoResult<()> {
-    let args = args().skip(1).collect::<Vec<_>>();
-    let headless = args.contains(&"--no-rlviser".to_string());
+    let headless = args().skip(1).any(|arg| arg == "--no-rlviser");
 
     let (game_tx_hold, _) = broadcast::channel(255);
     let (tx, game_rx) = mpsc::channel(255);
@@ -97,8 +96,8 @@ impl ClientSession {
         self.buffer.reserve(4 + flat.len());
 
         self.buffer.extend_from_slice(&(data_type as u16).to_be_bytes());
-        assert!(flat.len() <= u16::MAX as usize, "Flatbuffer too large");
-        self.buffer.extend_from_slice(&(flat.len() as u16).to_be_bytes());
+        self.buffer
+            .extend_from_slice(&u16::try_from(flat.len()).expect("Flatbuffer too large").to_be_bytes());
         self.buffer.extend_from_slice(flat);
 
         self.client.write_all(&self.buffer).await?;
@@ -173,16 +172,19 @@ impl ClientSession {
 
     async fn handle_game_message(&mut self, msg: messages::FromGame) -> IoResult<bool> {
         match msg {
-            messages::FromGame::None => {
-                println!("Received None message type, closing connection");
-                return Ok(false);
+            messages::FromGame::StopCommand(force) => {
+                let Some(client_params) = &self.client_params else {
+                    return Ok(false);
+                };
+
+                if force || client_params.close_after_match {
+                    return Ok(false);
+                }
             }
             messages::FromGame::GameTickPacket(packet) => {
-                if self.client_params.is_none() {
-                    return Ok(true);
+                if self.client_params.is_some() {
+                    self.buffered_send_flat(SocketDataType::GameTickPacket, &packet).await?;
                 }
-
-                self.buffered_send_flat(SocketDataType::GameTickPacket, &packet).await?;
             }
             messages::FromGame::MatchSettings(settings) => {
                 self.buffered_send_flat(SocketDataType::MatchSettings, &settings).await?;

@@ -29,7 +29,7 @@ pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchSetting
     settings.game_mode = match_header["game_mode"].as_str().unwrap().parse().unwrap_or_default();
     settings.instant_start = match_header
         .get("start_without_countdown")
-        .and_then(|b| b.as_bool())
+        .and_then(toml::Value::as_bool)
         .unwrap_or_default();
 
     let cars_header = toml["cars"].as_array().unwrap_or(&empty_vec);
