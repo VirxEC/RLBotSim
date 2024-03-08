@@ -22,7 +22,7 @@ pub struct ExternalManager {
 impl ExternalManager {
     pub async fn new() -> IoResult<Self> {
         let socket = UdpSocket::bind("0.0.0.0:34254").await?;
-        Command::new(RLVISER_PATH).spawn()?;
+        Command::new(RLVISER_PATH).env("CARGO_MANIFEST_DIR", "").spawn()?;
 
         let mut buffer = Vec::with_capacity(1024);
         buffer.resize(1, 0);
