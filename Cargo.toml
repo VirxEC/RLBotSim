@@ -9,3 +9,8 @@ members = [
 lto = true
 strip = true
 panic = "abort"
+
+[profile.debug_with_release]
+inherits = "release"
+debug = true
+strip = false

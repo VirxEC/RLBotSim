@@ -22,8 +22,8 @@ const DEFAULT_ADDRESS: &str = "127.0.0.1";
 async fn main() -> IoResult<()> {
     let headless = args().skip(1).any(|arg| arg == "--no-rlviser");
 
-    let (game_tx_hold, _) = broadcast::channel(255);
-    let (tx, game_rx) = mpsc::channel(255);
+    let (game_tx_hold, _) = broadcast::channel(63); 
+    let (tx, game_rx) = mpsc::channel(31);
     let (shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
 
     let game_tx = game_tx_hold.clone();
@@ -71,13 +71,14 @@ impl ClientSession {
     async fn handle_connection(mut self) -> IoResult<()> {
         loop {
             tokio::select! {
-                Ok(data_type) = self.client.read_u16() => {
-                    if !self.handle_client_message(data_type).await? {
+                biased;
+                Ok(msg) = self.rx.recv() => {
+                    if !self.handle_game_message(msg).await? {
                         break;
                     }
                 }
-                Ok(msg) = self.rx.recv() => {
-                    if !self.handle_game_message(msg).await? {
+                Ok(data_type) = self.client.read_u16() => {
+                    if !self.handle_client_message(data_type).await? {
                         break;
                     }
                 }

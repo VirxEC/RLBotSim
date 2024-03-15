@@ -432,6 +432,13 @@ async fn run_with_rlviser(mut interval: Interval, mut game: Game<'_>, mut rx: mp
 
     loop {
         tokio::select! {
+            biased;
+            // make tokio timer that goes off 120 times per second
+            // every time it goes off, send a game tick packet to the client
+            _ = interval.tick() => {
+                let game_state = game.advance_state();
+                rlviser.send_game_state(&game_state).await.unwrap();
+            },
             // modifications below should also be made to the `run_headless` function
             Some(msg) = rx.recv() => {
                 if !game.handle_message_from_client(msg).unwrap() {
@@ -443,12 +450,6 @@ async fn run_with_rlviser(mut interval: Interval, mut game: Game<'_>, mut rx: mp
                     game.set_state(&game_state);
                 }
             }
-            // make tokio timer that goes off 120 times per second
-            // every time it goes off, send a game tick packet to the client
-            _ = interval.tick() => {
-                let game_state = game.advance_state();
-                rlviser.send_game_state(&game_state).await.unwrap();
-            },
             else => break,
         }
     }
@@ -459,13 +460,14 @@ async fn run_with_rlviser(mut interval: Interval, mut game: Game<'_>, mut rx: mp
 async fn run_headless(mut interval: Interval, mut game: Game<'_>, mut rx: mpsc::Receiver<messages::ToGame>) {
     loop {
         tokio::select! {
+            biased;
+            _ = interval.tick() => {
+                game.advance_state();
+            }
             Some(msg) = rx.recv() => {
                 if !game.handle_message_from_client(msg).unwrap() {
                     break;
                 }
-            }
-            _ = interval.tick() => {
-                game.advance_state();
             }
             else => break,
         }

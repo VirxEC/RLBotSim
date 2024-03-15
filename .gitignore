@@ -8,3 +8,5 @@ rlviser*
 umodel*
 settings.txt
 assets.path
+*.svg
+*.data*
