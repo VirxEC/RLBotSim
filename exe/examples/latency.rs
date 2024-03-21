@@ -136,9 +136,9 @@ async fn main() -> IoResult<()> {
         let diff = end_time - start_time;
         times.push(diff);
 
-        if diff > Duration::from_millis(9) {
+        if diff > Duration::from_millis(9) || diff < Duration::from_millis(7) || i % 200 == 0 {
             num_spkies += 1;
-            print!("Spikes: {}%\r", num_spkies as f32 / i as f32 * 100.);
+            print!("Spikes: {}%   \r", num_spkies as f32 / i as f32 * 100.);
             std::io::stdout().flush().unwrap();
         }
     }

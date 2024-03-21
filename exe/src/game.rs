@@ -1,3 +1,9 @@
+use crate::{
+    messages,
+    util::{self, RsToFlat},
+    viser,
+};
+use async_timer::{interval, Interval};
 use rlbot_sockets::{flat, flatbuffers::FlatBufferBuilder};
 use rocketsim_rs::{
     consts::DOUBLEJUMP_MAX_DELAY,
@@ -12,16 +18,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
     time::Duration,
 };
-use tokio::{
-    sync::{broadcast, mpsc},
-    time::{interval, Interval},
-};
-
-use crate::{
-    messages,
-    util::{self, RsToFlat},
-    viser,
-};
+use tokio::sync::{broadcast, mpsc};
 
 const GAME_TPS: u8 = 120;
 const GAME_DT: f32 = 1. / GAME_TPS as f32;
@@ -42,6 +39,7 @@ struct Game<'a> {
 }
 
 impl<'a> Game<'a> {
+    #[inline]
     fn new(tx: broadcast::Sender<messages::FromGame>) -> Self {
         Self {
             tx,
@@ -403,6 +401,53 @@ impl<'a> Game<'a> {
 
         packet
     }
+
+    async fn run_with_rlviser(mut self, mut interval: Interval, mut rx: mpsc::Receiver<messages::ToGame>) {
+        let mut rlviser = viser::ExternalManager::new().await.unwrap();
+
+        loop {
+            tokio::select! {
+                biased;
+                // make tokio timer that goes off 120 times per second
+                // every time it goes off, send a game tick packet to the client
+                _ = interval.wait() => {
+                    let game_state = self.advance_state();
+                    rlviser.send_game_state(&game_state).await.unwrap();
+                },
+                // modifications below should also be made to the `run_headless` function
+                Some(msg) = rx.recv() => {
+                    if !self.handle_message_from_client(msg).unwrap() {
+                        break;
+                    }
+                }
+                Ok(game_state) = rlviser.check_for_messages() => {
+                    if let Some(game_state) = game_state {
+                        self.set_state(&game_state);
+                    }
+                }
+                else => break,
+            }
+        }
+
+        rlviser.close().await.unwrap();
+    }
+
+    async fn run_headless(mut self, mut interval: Interval, mut rx: mpsc::Receiver<messages::ToGame>) {
+        loop {
+            tokio::select! {
+                biased;
+                _ = interval.wait() => {
+                    self.advance_state();
+                }
+                Some(msg) = rx.recv() => {
+                    if !self.handle_message_from_client(msg).unwrap() {
+                        break;
+                    }
+                }
+                else => break,
+            }
+        }
+    }
 }
 
 #[tokio::main(worker_threads = 2)]
@@ -418,58 +463,11 @@ pub async fn run_rl(
     let game = Game::new(tx);
 
     if headless {
-        run_headless(interval, game, rx).await;
+        game.run_headless(interval, rx).await;
     } else {
-        run_with_rlviser(interval, game, rx).await;
+        game.run_with_rlviser(interval, rx).await;
     }
 
     println!("Shutting down RocketSim");
     shutdown_sender.send(()).await.unwrap();
-}
-
-async fn run_with_rlviser(mut interval: Interval, mut game: Game<'_>, mut rx: mpsc::Receiver<messages::ToGame>) {
-    let mut rlviser = viser::ExternalManager::new().await.unwrap();
-
-    loop {
-        tokio::select! {
-            biased;
-            // make tokio timer that goes off 120 times per second
-            // every time it goes off, send a game tick packet to the client
-            _ = interval.tick() => {
-                let game_state = game.advance_state();
-                rlviser.send_game_state(&game_state).await.unwrap();
-            },
-            // modifications below should also be made to the `run_headless` function
-            Some(msg) = rx.recv() => {
-                if !game.handle_message_from_client(msg).unwrap() {
-                    break;
-                }
-            }
-            Ok(game_state) = rlviser.check_for_messages() => {
-                if let Some(game_state) = game_state {
-                    game.set_state(&game_state);
-                }
-            }
-            else => break,
-        }
-    }
-
-    rlviser.close().await.unwrap();
-}
-
-async fn run_headless(mut interval: Interval, mut game: Game<'_>, mut rx: mpsc::Receiver<messages::ToGame>) {
-    loop {
-        tokio::select! {
-            biased;
-            _ = interval.tick() => {
-                game.advance_state();
-            }
-            Some(msg) = rx.recv() => {
-                if !game.handle_message_from_client(msg).unwrap() {
-                    break;
-                }
-            }
-            else => break,
-        }
-    }
 }

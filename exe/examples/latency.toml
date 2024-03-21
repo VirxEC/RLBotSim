@@ -3,10 +3,30 @@ launcher = "steam"
 auto_start_bots = true
 
 [match]
-num_cars = 1
+num_cars = 6
 game_mode = "Soccer"
 game_map_upk = "Stadium_P"
 
 [[cars]]
-config = "atba/atba.toml"
+config = "../../../python-interface/tests/atba/atba.toml"
 team = 0
+
+[[cars]]
+config = "../../../python-interface/tests/atba/atba.toml"
+team = 0
+
+[[cars]]
+config = "../../../python-interface/tests/atba/atba.toml"
+team = 0
+
+[[cars]]
+config = "../../../python-interface/tests/atba/atba.toml"
+team = 1
+
+[[cars]]
+config = "../../../python-interface/tests/atba/atba.toml"
+team = 1
+
+[[cars]]
+config = "../../../python-interface/tests/atba/atba.toml"
+team = 1

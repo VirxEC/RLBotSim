@@ -1,5 +1,3 @@
-#![warn(clippy::all)]
-
 mod game;
 mod messages;
 mod parse;
@@ -22,14 +20,16 @@ const DEFAULT_ADDRESS: &str = "127.0.0.1";
 async fn main() -> IoResult<()> {
     let headless = args().skip(1).any(|arg| arg == "--no-rlviser");
 
-    let (game_tx_hold, _) = broadcast::channel(63); 
+    let (game_tx_hold, _) = broadcast::channel(63);
     let (tx, game_rx) = mpsc::channel(31);
     let (shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
 
     let game_tx = game_tx_hold.clone();
     thread::spawn(move || game::run_rl(game_tx, game_rx, shutdown_sender, headless));
 
-    let tcp_connection = TcpListener::bind(format!("{DEFAULT_ADDRESS}:{RLBOT_SOCKETS_PORT}")).await?;
+    let addr = format!("{DEFAULT_ADDRESS}:{RLBOT_SOCKETS_PORT}");
+
+    let tcp_connection = TcpListener::bind(&addr).await?;
 
     println!("Server listening on port {RLBOT_SOCKETS_PORT}");
 
@@ -37,8 +37,9 @@ async fn main() -> IoResult<()> {
         tokio::select! {
             biased;
             Ok((client, _)) = tcp_connection.accept() => {
+                client.set_nodelay(true)?;
                 let client_session = ClientSession::new(client, tx.clone(), game_tx_hold.subscribe());
-                tokio::spawn(async move { client_session.handle_connection().await });
+                tokio::spawn(async move { client_session.handle_connection().await.unwrap() });
             }
             _ = shutdown_receiver.recv() => {
                 break;
@@ -58,6 +59,7 @@ struct ClientSession {
 }
 
 impl ClientSession {
+    #[inline]
     fn new(client: TcpStream, tx: mpsc::Sender<messages::ToGame>, rx: broadcast::Receiver<messages::FromGame>) -> Self {
         Self {
             client,
@@ -73,12 +75,12 @@ impl ClientSession {
             tokio::select! {
                 biased;
                 Ok(msg) = self.rx.recv() => {
-                    if !self.handle_game_message(msg).await? {
+                    if !self.handle_game_message(msg).await.is_ok_and(|x| x) {
                         break;
                     }
                 }
                 Ok(data_type) = self.client.read_u16() => {
-                    if !self.handle_client_message(data_type).await? {
+                    if !self.handle_client_message(data_type).await.is_ok_and(|x| x) {
                         break;
                     }
                 }
@@ -97,8 +99,8 @@ impl ClientSession {
         self.buffer.reserve(4 + flat.len());
 
         self.buffer.extend_from_slice(&(data_type as u16).to_be_bytes());
-        self.buffer
-            .extend_from_slice(&u16::try_from(flat.len()).expect("Flatbuffer too large").to_be_bytes());
+        let size = u16::try_from(flat.len()).expect("Flatbuffer too large");
+        self.buffer.extend_from_slice(&size.to_be_bytes());
         self.buffer.extend_from_slice(flat);
 
         self.client.write_all(&self.buffer).await?;
@@ -119,7 +121,9 @@ impl ClientSession {
             }
             SocketDataType::MatchSettings => {
                 let match_settings = root::<flat::MatchSettings>(&self.buffer).unwrap().unpack();
-                self.tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
+                self.tx
+                    .blocking_send(messages::ToGame::MatchSettings(match_settings))
+                    .unwrap();
             }
             SocketDataType::ReadyMessage => {
                 let ready_message = root::<flat::ReadyMessage>(&self.buffer).unwrap().unpack();
