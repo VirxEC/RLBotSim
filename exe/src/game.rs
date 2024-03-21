@@ -55,7 +55,7 @@ impl<'a> Game<'a> {
 
     fn set_state_to_countdown(&mut self) {
         self.state_type = flat::GameStateType::Countdown;
-        self.countdown_end_tick = self.arena.get_tick_count() + 3 * GAME_TPS as u64;
+        self.countdown_end_tick = self.arena.get_tick_count() + 3 * u64::from(GAME_TPS);
     }
 
     fn handle_message_from_client(&mut self, msg: messages::ToGame) -> IoResult<bool> {
@@ -351,7 +351,7 @@ impl<'a> Game<'a> {
                 .unwrap();
 
             packet.ball.latest_touch.player_index = index as u32;
-            packet.ball.latest_touch.player_name = name.clone();
+            packet.ball.latest_touch.player_name.clone_from(name);
         }
 
         // Cars
@@ -410,7 +410,7 @@ impl<'a> Game<'a> {
                 biased;
                 // make tokio timer that goes off 120 times per second
                 // every time it goes off, send a game tick packet to the client
-                _ = interval.wait() => {
+                () = interval.wait() => {
                     let game_state = self.advance_state();
                     rlviser.send_game_state(&game_state).await.unwrap();
                 },
@@ -436,7 +436,7 @@ impl<'a> Game<'a> {
         loop {
             tokio::select! {
                 biased;
-                _ = interval.wait() => {
+                () = interval.wait() => {
                     self.advance_state();
                 }
                 Some(msg) = rx.recv() => {

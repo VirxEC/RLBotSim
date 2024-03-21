@@ -30,8 +30,8 @@ impl<'a> Connection<'a> {
         self.buffer.reserve(4 + flat.len());
 
         self.buffer.extend_from_slice(&(data_type as u16).to_be_bytes());
-        assert!(flat.len() <= u16::MAX as usize, "Flatbuffer too large");
-        self.buffer.extend_from_slice(&(flat.len() as u16).to_be_bytes());
+        let size = u16::try_from(flat.len()).expect("Flatbuffer too large");
+        self.buffer.extend_from_slice(&size.to_be_bytes());
         self.buffer.extend_from_slice(flat);
 
         self.tcp.write_all(&self.buffer).await?;
@@ -143,7 +143,7 @@ async fn main() -> IoResult<()> {
         }
     }
 
-    let sum: u128 = times.iter().map(|t| t.as_nanos()).sum();
+    let sum: u128 = times.iter().map(Duration::as_nanos).sum();
     let average = sum / times.len() as u128;
     let average_ms = average as f64 / 1_000_000.0;
     println!("Average time to receive GameTickPacket: {average_ms:?}ms");
