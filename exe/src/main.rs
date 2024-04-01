@@ -164,6 +164,10 @@ impl ClientSession {
                 let input = root::<flat::PlayerInput>(&self.buffer).unwrap().unpack();
                 self.tx.send(messages::ToGame::PlayerInput(input)).await.unwrap();
             }
+            SocketDataType::DesiredGameState => {
+                let desired_state = root::<flat::DesiredGameState>(&self.buffer).unwrap().unpack();
+                self.tx.send(messages::ToGame::DesiredGameState(desired_state)).await.unwrap();
+            }
             SocketDataType::StopCommand => {
                 let command = root::<flat::StopCommand>(&self.buffer).unwrap().unpack();
                 self.tx.send(messages::ToGame::StopCommand(command)).await.unwrap();

@@ -1,6 +1,6 @@
 use crate::{
     messages,
-    util::{self, RsToFlat},
+    util::{self, RsToFlat, SetFromPartial},
     viser,
 };
 use async_timer::{interval, Interval};
@@ -309,6 +309,50 @@ impl<'a> Game<'a> {
                 };
 
                 self.arena.pin_mut().set_car_controls(car_id, car_controls).unwrap();
+            }
+            messages::ToGame::DesiredGameState(desired_state) => {
+                let mut game_state = self.arena.pin_mut().get_game_state();
+
+                if let Some(phys) = desired_state.ball_state.map(|ball| ball.physics) {
+                    game_state.ball.pos.set_from_partial(phys.location);
+                    game_state.ball.vel.set_from_partial(phys.velocity);
+                    game_state.ball.ang_vel.set_from_partial(phys.angular_velocity);
+                    game_state.ball.rot_mat.set_from_partial(phys.rotation);
+                }
+
+                for (i, car) in desired_state.car_states.into_iter().enumerate() {
+                    let car_id = self.packet.get_car_id_from_index(i);
+                    let car_state = game_state.cars.iter_mut().find(|car| car.id == car_id).unwrap();
+
+                    if let Some(phys) = car.physics {
+                        car_state.state.pos.set_from_partial(phys.location);
+                        car_state.state.vel.set_from_partial(phys.velocity);
+                        car_state.state.ang_vel.set_from_partial(phys.angular_velocity);
+                        car_state.state.rot_mat.set_from_partial(phys.rotation);
+                    }
+
+                    if let Some(boost_amount) = car.boost_amount {
+                        car_state.state.boost = boost_amount.val;
+                    }
+                }
+
+                if let Some(game_info) = desired_state.game_info_state {
+                    if let Some(gravity_z) = game_info.world_gravity_z {
+                        let mut mutators = self.arena.get_mutator_config();
+                        mutators.gravity.z = gravity_z.val;
+                        self.arena.pin_mut().set_mutator_config(mutators);
+                    }
+
+                    if let Some(paused) = game_info.paused {
+                        self.packet.set_state_type(if paused.val {
+                            flat::GameStateType::Paused
+                        } else {
+                            flat::GameStateType::Active
+                        });
+                    }
+                }
+
+                self.arena.pin_mut().set_game_state(&game_state).unwrap();
             }
             messages::ToGame::StopCommand(info) => {
                 self.packet.set_state_type(flat::GameStateType::Ended);

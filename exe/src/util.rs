@@ -59,3 +59,47 @@ impl RsToFlat<flat::RotatorT> for RotMat {
         }
     }
 }
+
+pub trait SetFromPartial<T> {
+    fn set_from_partial(&mut self, partial: Option<T>);
+}
+
+impl SetFromPartial<Box<flat::Vector3PartialT>> for Vec3 {
+    fn set_from_partial(&mut self, partial: Option<Box<flat::Vector3PartialT>>) {
+        if let Some(partial) = partial {
+            if let Some(x) = partial.x {
+                self.x = x.val;
+            }
+
+            if let Some(y) = partial.y {
+                self.y = y.val;
+            }
+
+            if let Some(z) = partial.z {
+                self.z = z.val;
+            }
+        }
+    }
+}
+
+impl SetFromPartial<Box<flat::RotatorPartialT>> for RotMat {
+    fn set_from_partial(&mut self, partial: Option<Box<flat::RotatorPartialT>>) {
+        if let Some(partial) = partial {
+            let mut angles = Angle::from_rotmat(*self);
+
+            if let Some(pitch) = partial.pitch {
+                angles.pitch = pitch.val;
+            }
+
+            if let Some(yaw) = partial.yaw {
+                angles.yaw = yaw.val;
+            }
+
+            if let Some(roll) = partial.roll {
+                angles.roll = roll.val;
+            }
+
+            *self = angles.to_rotmat();
+        }
+    }
+}
