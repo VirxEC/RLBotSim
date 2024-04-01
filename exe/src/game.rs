@@ -54,7 +54,7 @@ impl PacketData {
 
     #[inline]
     fn clear_extra_car_info(&mut self) {
-        self.extra_car_info.clear()
+        self.extra_car_info.clear();
     }
 
     #[inline]
@@ -336,6 +336,8 @@ impl<'a> Game<'a> {
                     }
                 }
 
+                self.set_state(&game_state);
+
                 if let Some(game_info) = desired_state.game_info_state {
                     if let Some(gravity_z) = game_info.world_gravity_z {
                         let mut mutators = self.arena.get_mutator_config();
@@ -351,8 +353,6 @@ impl<'a> Game<'a> {
                         });
                     }
                 }
-
-                self.arena.pin_mut().set_game_state(&game_state).unwrap();
             }
             messages::ToGame::StopCommand(info) => {
                 self.packet.set_state_type(flat::GameStateType::Ended);
@@ -543,6 +543,7 @@ impl<'a> Game<'a> {
         game_state
     }
 
+    #[tokio::main(worker_threads = 2)]
     async fn run_with_rlviser(mut self, mut interval: Interval, mut rx: mpsc::Receiver<messages::ToGame>) {
         let mut rlviser = viser::ExternalManager::new().await.unwrap();
 
@@ -573,6 +574,7 @@ impl<'a> Game<'a> {
         rlviser.close().await.unwrap();
     }
 
+    #[tokio::main(worker_threads = 2)]
     async fn run_headless(mut self, mut interval: Interval, mut rx: mpsc::Receiver<messages::ToGame>) {
         loop {
             tokio::select! {
@@ -591,8 +593,7 @@ impl<'a> Game<'a> {
     }
 }
 
-#[tokio::main(worker_threads = 2)]
-pub async fn run_rl(
+pub fn run_rl(
     tx: broadcast::Sender<messages::FromGame>,
     rx: mpsc::Receiver<messages::ToGame>,
     shutdown_sender: mpsc::Sender<()>,
@@ -604,11 +605,11 @@ pub async fn run_rl(
     let game = Game::new(tx);
 
     if headless {
-        game.run_headless(interval, rx).await;
+        game.run_headless(interval, rx);
     } else {
-        game.run_with_rlviser(interval, rx).await;
+        game.run_with_rlviser(interval, rx);
     }
 
     println!("Shutting down RocketSim");
-    shutdown_sender.send(()).await.unwrap();
+    shutdown_sender.blocking_send(()).unwrap();
 }
