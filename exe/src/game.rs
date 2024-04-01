@@ -71,7 +71,6 @@ impl<'a> Game<'a> {
                 }
             }
             messages::ToGame::MatchSettings(match_settings) => {
-                self.set_state_to_countdown();
                 util::auto_start_bots(&match_settings)?;
                 self.set_match_settings(match_settings);
                 self.set_field_info();
@@ -127,6 +126,8 @@ impl<'a> Game<'a> {
             // flat::GameMode::Hockey => Arena::default_snowday(),
             _ => unimplemented!(),
         };
+
+        self.set_state_to_countdown();
 
         self.arena.pin_mut().set_goal_scored_callback(
             |arena, car_team, _| {

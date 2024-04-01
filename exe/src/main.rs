@@ -27,10 +27,7 @@ async fn main() -> IoResult<()> {
     let game_tx = game_tx_hold.clone();
     thread::spawn(move || game::run_rl(game_tx, game_rx, shutdown_sender, headless));
 
-    let addr = format!("{DEFAULT_ADDRESS}:{RLBOT_SOCKETS_PORT}");
-
-    let tcp_connection = TcpListener::bind(&addr).await?;
-
+    let tcp_connection = TcpListener::bind((DEFAULT_ADDRESS, RLBOT_SOCKETS_PORT)).await?;
     println!("Server listening on port {RLBOT_SOCKETS_PORT}");
 
     loop {
@@ -39,7 +36,11 @@ async fn main() -> IoResult<()> {
             Ok((client, _)) = tcp_connection.accept() => {
                 client.set_nodelay(true)?;
                 let client_session = ClientSession::new(client, tx.clone(), game_tx_hold.subscribe());
-                tokio::spawn(async move { client_session.handle_connection().await.unwrap() });
+                tokio::spawn(async move {
+                    if let Err(e) = client_session.handle_connection().await {
+                        println!("Error from client connection: {e}");
+                    }
+                });
             }
             _ = shutdown_receiver.recv() => {
                 break;

@@ -2,10 +2,18 @@ use rocketsim_rs::{
     bytes::{FromBytes, ToBytes},
     GameState,
 };
-use std::{io::Result as IoResult, net::SocketAddr, process::Command};
+use std::{
+    io::Result as IoResult,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    process::Command,
+};
 use tokio::net::UdpSocket;
 
 const RLVISER_PATH: &str = if cfg!(windows) { "./rlviser.exe" } else { "./rlviser" };
+const RLVISER_PORT: u16 = 45243;
+const ROCKETSIM_PORT: u16 = 34254;
+
+const RLVISER_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), RLVISER_PORT);
 
 #[repr(u8)]
 pub enum UdpPacketTypes {
@@ -16,26 +24,21 @@ pub enum UdpPacketTypes {
 pub struct ExternalManager {
     socket: UdpSocket,
     buffer: Vec<u8>,
-    src: SocketAddr,
 }
 
 impl ExternalManager {
     pub async fn new() -> IoResult<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:34254").await?;
         Command::new(RLVISER_PATH).env("CARGO_MANIFEST_DIR", "").spawn()?;
 
-        let mut buffer = Vec::with_capacity(1024);
-        buffer.resize(1, 0);
-
-        let (_, src) = socket.recv_from(&mut buffer).await?;
-        assert_eq!(buffer[0], 1);
-
-        Ok(Self { socket, buffer, src })
+        Ok(Self {
+            socket: UdpSocket::bind(("0.0.0.0", ROCKETSIM_PORT)).await?,
+            buffer: Vec::with_capacity(1024),
+        })
     }
 
     pub async fn send_game_state(&mut self, game_state: &GameState) -> IoResult<()> {
-        self.socket.send_to(&[UdpPacketTypes::GameState as u8], self.src).await?;
-        self.socket.send_to(&game_state.to_bytes(), self.src).await?;
+        self.socket.send_to(&[UdpPacketTypes::GameState as u8], RLVISER_ADDR).await?;
+        self.socket.send_to(&game_state.to_bytes(), RLVISER_ADDR).await?;
 
         Ok(())
     }
@@ -66,7 +69,7 @@ impl ExternalManager {
     }
 
     pub async fn close(&mut self) -> IoResult<()> {
-        self.socket.send_to(&[UdpPacketTypes::Quit as u8], self.src).await?;
+        self.socket.send_to(&[UdpPacketTypes::Quit as u8], RLVISER_ADDR).await?;
         println!("Sent quit signal to rlviser");
 
         Ok(())
