@@ -198,6 +198,9 @@ impl ClientSession {
             messages::FromGame::FieldInfo(field) => {
                 self.buffered_send_flat(SocketDataType::FieldInfo, &field).await?;
             }
+            messages::FromGame::BallPrediction(prediction) => {
+                self.buffered_send_flat(SocketDataType::BallPrediction, &prediction).await?;
+            }
         }
 
         Ok(true)

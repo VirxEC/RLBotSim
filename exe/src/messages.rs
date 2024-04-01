@@ -20,6 +20,6 @@ pub enum FromGame {
     MatchSettings(Box<[u8]>),
     FieldInfo(Box<[u8]>),
     // QuickChat,
-    // BallPrediction,
+    BallPrediction(Box<[u8]>),
     // MessagePacket(flat::MessagePacketT),
 }

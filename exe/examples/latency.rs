@@ -88,6 +88,7 @@ impl<'a> Connection<'a> {
         self.send_flatbuffer(SocketDataType::StartCommand).await?;
 
         self.wait_for_type(SocketDataType::GameTickPacket).await?;
+        self.wait_for_type(SocketDataType::BallPrediction).await?;
 
         Ok(())
     }
