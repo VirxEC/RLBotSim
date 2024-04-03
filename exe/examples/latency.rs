@@ -61,7 +61,8 @@ impl<'a> Connection<'a> {
     }
 
     async fn connect(&mut self) -> IoResult<()> {
-        let ready_message = flat::ReadyMessageT::default();
+        let mut ready_message = flat::ReadyMessageT::default();
+        ready_message.wants_ball_predictions = true;
 
         self.builder.reset();
         let offset = ready_message.pack(&mut self.builder);

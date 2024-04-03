@@ -354,6 +354,9 @@ impl<'a> Game<'a> {
                     }
                 }
             }
+            messages::ToGame::MatchComm(message) => {
+                self.tx.send(messages::FromGame::MatchComm(message)).unwrap();
+            }
             messages::ToGame::StopCommand(info) => {
                 self.packet.set_state_type(flat::GameStateType::Ended);
 
@@ -519,26 +522,30 @@ impl<'a> Game<'a> {
 
         let game_state = self.arena.pin_mut().get_game_state();
 
-        // construct and send out game tick packet
-        let packet = self.packet.get_game_tick_packet(&game_state, self.arena.get_ball_radius());
+        {
+            // construct and send out game tick packet
+            let packet = self.packet.get_game_tick_packet(&game_state, self.arena.get_ball_radius());
+    
+            self.flat_builder.reset();
+            let offset = packet.pack(&mut self.flat_builder);
+            self.flat_builder.finish(offset, None);
+            let bytes = self.flat_builder.finished_data();
+    
+            let _ = self.tx.send(messages::FromGame::GameTickPacket(bytes.into()));
+        }
 
-        self.flat_builder.reset();
-        let offset = packet.pack(&mut self.flat_builder);
-        self.flat_builder.finish(offset, None);
-        let bytes = self.flat_builder.finished_data();
-
-        let _ = self.tx.send(messages::FromGame::GameTickPacket(bytes.into()));
-
-        let ball_prediction = self
-            .ball_prediction
-            .get_ball_prediction(game_state.ball, game_state.tick_count);
-
-        self.flat_builder.reset();
-        let offset = ball_prediction.pack(&mut self.flat_builder);
-        self.flat_builder.finish(offset, None);
-        let bytes = self.flat_builder.finished_data();
-
-        let _ = self.tx.send(messages::FromGame::BallPrediction(bytes.into()));
+        {
+            let ball_prediction = self
+                .ball_prediction
+                .get_ball_prediction(game_state.ball, game_state.tick_count);
+    
+            self.flat_builder.reset();
+            let offset = ball_prediction.pack(&mut self.flat_builder);
+            self.flat_builder.finish(offset, None);
+            let bytes = self.flat_builder.finished_data();
+    
+            let _ = self.tx.send(messages::FromGame::BallPrediction(bytes.into()));
+        }
 
         game_state
     }

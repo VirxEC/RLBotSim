@@ -10,6 +10,7 @@ pub enum ToGame {
     DesiredGameState(flat::DesiredGameStateT),
     // RenderGroup(flat::RenderGroupT),
     // RemoveRenderGroup(flat::RemoveRenderGroupT),
+    MatchComm(Box<[u8]>),
     StopCommand(flat::StopCommandT),
 }
 
@@ -19,7 +20,7 @@ pub enum FromGame {
     GameTickPacket(Box<[u8]>),
     MatchSettings(Box<[u8]>),
     FieldInfo(Box<[u8]>),
-    // QuickChat,
+    MatchComm(Box<[u8]>),
     BallPrediction(Box<[u8]>),
     // MessagePacket(flat::MessagePacketT),
 }

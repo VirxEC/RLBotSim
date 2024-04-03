@@ -168,6 +168,12 @@ impl ClientSession {
                 let desired_state = root::<flat::DesiredGameState>(&self.buffer).unwrap().unpack();
                 self.tx.send(messages::ToGame::DesiredGameState(desired_state)).await.unwrap();
             }
+            SocketDataType::MatchComm => {
+                // assert that it's actually a MatchComm message
+                assert!(root::<flat::MatchComm>(&self.buffer).is_ok());
+
+                self.tx.send(messages::ToGame::MatchComm(self.buffer.clone().into_boxed_slice())).await.unwrap();
+            }
             SocketDataType::StopCommand => {
                 let command = root::<flat::StopCommand>(&self.buffer).unwrap().unpack();
                 self.tx.send(messages::ToGame::StopCommand(command)).await.unwrap();
@@ -202,8 +208,23 @@ impl ClientSession {
             messages::FromGame::FieldInfo(field) => {
                 self.buffered_send_flat(SocketDataType::FieldInfo, &field).await?;
             }
+            messages::FromGame::MatchComm(message) => {
+                let Some(client_params) = &self.client_params else {
+                    return Ok(false);
+                };
+
+                if client_params.wants_comms {
+                    self.buffered_send_flat(SocketDataType::MatchComm, &message).await?;
+                }
+            }
             messages::FromGame::BallPrediction(prediction) => {
-                self.buffered_send_flat(SocketDataType::BallPrediction, &prediction).await?;
+                let Some(client_params) = &self.client_params else {
+                    return Ok(false);
+                };
+
+                if client_params.wants_ball_predictions {
+                    self.buffered_send_flat(SocketDataType::BallPrediction, &prediction).await?;
+                }
             }
         }
 
