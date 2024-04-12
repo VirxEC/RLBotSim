@@ -1,5 +1,8 @@
 use rlbot_sockets::flat;
-use rocketsim_rs::math::{Angle, RotMat, Vec3};
+use rocketsim_rs::{
+    math::{Angle, RotMat, Vec3},
+    render::{Color, Render, RenderMessage},
+};
 use std::{io::Result as IoResult, process::Command};
 
 pub fn auto_start_bots(match_settings: &flat::MatchSettingsT) -> IoResult<()> {
@@ -101,5 +104,60 @@ impl SetFromPartial<Box<flat::RotatorPartialT>> for RotMat {
 
             *self = angles.to_rotmat();
         }
+    }
+}
+
+pub trait FlatToRs<T> {
+    fn to_rs(self) -> T;
+}
+
+impl FlatToRs<Vec3> for flat::Vector3T {
+    fn to_rs(self) -> Vec3 {
+        Vec3::new(self.x, self.y, self.z)
+    }
+}
+
+impl FlatToRs<Color> for flat::ColorT {
+    fn to_rs(self) -> Color {
+        Color::rgba(
+            f32::from(self.r) / 255.,
+            f32::from(self.g) / 255.,
+            f32::from(self.b) / 255.,
+            f32::from(self.a) / 255.,
+        )
+    }
+}
+
+impl FlatToRs<Render> for flat::RenderMessageT {
+    fn to_rs(self) -> Render {
+        match self.variety {
+            flat::RenderTypeT::NONE => panic!("Invalid render type NONE"),
+            flat::RenderTypeT::Line3D(line) => Render::Line {
+                start: line.start.to_rs(),
+                end: line.end.to_rs(),
+                color: line.color.to_rs(),
+            },
+            flat::RenderTypeT::PolyLine3D(polyline) => {
+                let positions = polyline.points.into_iter().map(FlatToRs::to_rs).collect();
+
+                Render::LineStrip {
+                    positions,
+                    color: polyline.color.to_rs(),
+                }
+            }
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl FlatToRs<RenderMessage> for flat::RenderGroupT {
+    fn to_rs(self) -> RenderMessage {
+        RenderMessage::AddRender(self.id, self.render_messages.into_iter().map(FlatToRs::to_rs).collect())
+    }
+}
+
+impl FlatToRs<RenderMessage> for flat::RemoveRenderGroupT {
+    fn to_rs(self) -> RenderMessage {
+        RenderMessage::RemoveRender(self.id)
     }
 }

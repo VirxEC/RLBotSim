@@ -1,5 +1,4 @@
 [rlbot]
-launcher = "steam"
 auto_start_bots = true
 
 [match]

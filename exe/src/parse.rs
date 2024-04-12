@@ -6,7 +6,7 @@ use std::{
     path::Path,
 };
 use tokio::fs;
-use toml::map::Map;
+use toml::{map::Map, Value};
 
 pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchSettingsT> {
     let empty_map = Map::new();
@@ -18,13 +18,16 @@ pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchSetting
 
     let mut settings = flat::MatchSettingsT::default();
 
-    let rlbot_header = toml["rlbot"].as_table().unwrap_or(&empty_map);
+    let rlbot_header = toml.get("rlbot").and_then(Value::as_table).unwrap_or(&empty_map);
 
-    settings.auto_start_bots = rlbot_header["auto_start_bots"].as_bool().unwrap_or_default();
+    settings.auto_start_bots = rlbot_header
+        .get("auto_start_bots")
+        .and_then(Value::as_bool)
+        .unwrap_or_default();
 
     let match_header = toml["match"].as_table().unwrap_or(&empty_map);
 
-    let num_cars = match_header["num_cars"].as_integer().unwrap_or_default() as usize;
+    let num_cars = match_header.get("num_cars").and_then(Value::as_integer).unwrap_or_default() as usize;
 
     settings.game_mode = match_header["game_mode"].as_str().unwrap().parse().unwrap_or_default();
     settings.instant_start = match_header
@@ -32,7 +35,7 @@ pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchSetting
         .and_then(toml::Value::as_bool)
         .unwrap_or_default();
 
-    let cars_header = toml["cars"].as_array().unwrap_or(&empty_vec);
+    let cars_header = toml.get("cars").and_then(Value::as_array).unwrap_or(&empty_vec);
 
     let cars_len = num_cars.min(cars_header.len());
     settings.player_configurations.reserve(cars_len);

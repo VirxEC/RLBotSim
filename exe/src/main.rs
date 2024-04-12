@@ -168,11 +168,22 @@ impl ClientSession {
                 let desired_state = root::<flat::DesiredGameState>(&self.buffer).unwrap().unpack();
                 self.tx.send(messages::ToGame::DesiredGameState(desired_state)).await.unwrap();
             }
+            SocketDataType::RenderGroup => {
+                let group = root::<flat::RenderGroup>(&self.buffer).unwrap().unpack();
+                self.tx.send(messages::ToGame::RenderGroup(group)).await.unwrap();
+            }
+            SocketDataType::RemoveRenderGroup => {
+                let group = root::<flat::RemoveRenderGroup>(&self.buffer).unwrap().unpack();
+                self.tx.send(messages::ToGame::RemoveRenderGroup(group)).await.unwrap();
+            }
             SocketDataType::MatchComm => {
                 // assert that it's actually a MatchComm message
                 assert!(root::<flat::MatchComm>(&self.buffer).is_ok());
 
-                self.tx.send(messages::ToGame::MatchComm(self.buffer.clone().into_boxed_slice())).await.unwrap();
+                self.tx
+                    .send(messages::ToGame::MatchComm(self.buffer.clone().into_boxed_slice()))
+                    .await
+                    .unwrap();
             }
             SocketDataType::StopCommand => {
                 let command = root::<flat::StopCommand>(&self.buffer).unwrap().unpack();

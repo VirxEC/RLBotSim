@@ -8,8 +8,8 @@ pub enum ToGame {
     MatchSettings(flat::MatchSettingsT),
     PlayerInput(flat::PlayerInputT),
     DesiredGameState(flat::DesiredGameStateT),
-    // RenderGroup(flat::RenderGroupT),
-    // RemoveRenderGroup(flat::RemoveRenderGroupT),
+    RenderGroup(flat::RenderGroupT),
+    RemoveRenderGroup(flat::RemoveRenderGroupT),
     MatchComm(Box<[u8]>),
     StopCommand(flat::StopCommandT),
 }

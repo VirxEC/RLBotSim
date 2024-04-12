@@ -1,6 +1,6 @@
 use crate::{
     messages,
-    util::{self, RsToFlat, SetFromPartial},
+    util::{self, FlatToRs, RsToFlat, SetFromPartial},
     viser,
 };
 use async_timer::{interval, Interval};
@@ -9,6 +9,7 @@ use rocketsim_rs::{
     consts::DOUBLEJUMP_MAX_DELAY,
     cxx::UniquePtr,
     init,
+    render::RenderMessage,
     sim::{Arena, BallState, CarConfig, CarControls, Team},
     GameState,
 };
@@ -237,6 +238,12 @@ impl BallPredData {
     }
 }
 
+enum ClientState {
+    Connected,
+    Disconnected,
+    Render(RenderMessage),
+}
+
 struct Game<'a> {
     arena: UniquePtr<Arena>,
     tx: broadcast::Sender<messages::FromGame>,
@@ -268,7 +275,7 @@ impl<'a> Game<'a> {
         self.countdown_end_tick = self.arena.get_tick_count() + 3 * u64::from(GAME_TPS);
     }
 
-    fn handle_message_from_client(&mut self, msg: messages::ToGame) -> IoResult<bool> {
+    fn handle_message_from_client(&mut self, msg: messages::ToGame) -> IoResult<ClientState> {
         match msg {
             messages::ToGame::FieldInfoRequest(sender) => {
                 if let Some(field_info) = &self.field_info {
@@ -354,6 +361,12 @@ impl<'a> Game<'a> {
                     }
                 }
             }
+            messages::ToGame::RenderGroup(group) => {
+                return Ok(ClientState::Render(group.to_rs()));
+            }
+            messages::ToGame::RemoveRenderGroup(group) => {
+                return Ok(ClientState::Render(group.to_rs()));
+            }
             messages::ToGame::MatchComm(message) => {
                 self.tx.send(messages::FromGame::MatchComm(message)).unwrap();
             }
@@ -363,12 +376,12 @@ impl<'a> Game<'a> {
                 self.tx.send(messages::FromGame::StopCommand(info.shutdown_server)).unwrap();
 
                 if info.shutdown_server {
-                    return Ok(false);
+                    return Ok(ClientState::Disconnected);
                 }
             }
         }
 
-        Ok(true)
+        Ok(ClientState::Connected)
     }
 
     fn set_state(&mut self, game_state: &GameState) {
@@ -525,12 +538,12 @@ impl<'a> Game<'a> {
         {
             // construct and send out game tick packet
             let packet = self.packet.get_game_tick_packet(&game_state, self.arena.get_ball_radius());
-    
+
             self.flat_builder.reset();
             let offset = packet.pack(&mut self.flat_builder);
             self.flat_builder.finish(offset, None);
             let bytes = self.flat_builder.finished_data();
-    
+
             let _ = self.tx.send(messages::FromGame::GameTickPacket(bytes.into()));
         }
 
@@ -538,12 +551,12 @@ impl<'a> Game<'a> {
             let ball_prediction = self
                 .ball_prediction
                 .get_ball_prediction(game_state.ball, game_state.tick_count);
-    
+
             self.flat_builder.reset();
             let offset = ball_prediction.pack(&mut self.flat_builder);
             self.flat_builder.finish(offset, None);
             let bytes = self.flat_builder.finished_data();
-    
+
             let _ = self.tx.send(messages::FromGame::BallPrediction(bytes.into()));
         }
 
@@ -551,7 +564,7 @@ impl<'a> Game<'a> {
     }
 
     #[tokio::main(worker_threads = 2)]
-    async fn run_with_rlviser(mut self, mut interval: Interval, mut rx: mpsc::Receiver<messages::ToGame>) {
+    async fn run_with_rlviser(mut self, mut timer: Interval, mut rx: mpsc::Receiver<messages::ToGame>) {
         let mut rlviser = viser::ExternalManager::new().await.unwrap();
 
         loop {
@@ -559,19 +572,32 @@ impl<'a> Game<'a> {
                 biased;
                 // make tokio timer that goes off 120 times per second
                 // every time it goes off, send a game tick packet to the client
-                () = interval.wait() => {
+                () = timer.wait() => {
                     let game_state = self.advance_state();
                     rlviser.send_game_state(&game_state).await.unwrap();
                 },
                 // modifications below should also be made to the `run_headless` function
                 Some(msg) = rx.recv() => {
-                    if !self.handle_message_from_client(msg).unwrap() {
-                        break;
+                    match self.handle_message_from_client(msg).unwrap() {
+                        ClientState::Disconnected => break,
+                        ClientState::Connected => {}
+                        ClientState::Render(render) => {
+                            rlviser.send_render_group(render).await.unwrap();
+                        }
                     }
                 }
                 Ok(game_state) = rlviser.check_for_messages() => {
-                    if let Some(game_state) = game_state {
-                        self.set_state(&game_state);
+                    match game_state {
+                        viser::StateControl::GameState(game_state) => {
+                            self.set_state(&game_state);
+                        }
+                        viser::StateControl::Speed(speed) => {
+                            timer = interval(Duration::from_secs_f32(1. / (GAME_TPS as f32 * speed)));
+                        }
+                        viser::StateControl::Paused(paused) => {
+                            self.packet.set_state_type(if paused { flat::GameStateType::Paused } else { flat::GameStateType::Active });
+                        }
+                        viser::StateControl::None => {}
                     }
                 }
                 else => break,
@@ -590,8 +616,9 @@ impl<'a> Game<'a> {
                     self.advance_state();
                 }
                 Some(msg) = rx.recv() => {
-                    if !self.handle_message_from_client(msg).unwrap() {
-                        break;
+                    match self.handle_message_from_client(msg).unwrap() {
+                        ClientState::Disconnected => break,
+                        ClientState::Connected | ClientState::Render(_) => {}
                     }
                 }
                 else => break,
