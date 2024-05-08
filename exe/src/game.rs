@@ -169,7 +169,7 @@ impl PacketData {
             player.demolished_timeout = car.state.demo_respawn_timer;
             player.dodge_timeout = DOUBLEJUMP_MAX_DELAY - car.state.air_time_since_jump;
 
-            player.air_state = if car.state.has_contact {
+            player.air_state = if car.state.is_on_ground {
                 flat::AirState::OnGround
             } else if car.state.is_jumping {
                 if car.state.has_jumped {

@@ -9,4 +9,4 @@ edition = "2021"
 crate-type = ["lib"]
 
 [dependencies]
-flatbuffers = { git = "https://github.com/google/flatbuffers", branch = "master" }
+flatbuffers = "24.3.25"
