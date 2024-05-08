@@ -140,7 +140,7 @@ async fn main() -> IoResult<()> {
 
         if diff > Duration::from_secs_f32(51. / 6000.) || diff < Duration::from_secs_f32(49. / 6000.) || i % 200 == 0 {
             num_spkies += 1;
-            print!("Spikes: {}%   \r", num_spkies as f32 / i as f32 * 100.);
+            print!("Spikes: {:.3}%    \r", num_spkies as f32 / i as f32 * 100.);
             std::io::stdout().flush().unwrap();
         }
     }

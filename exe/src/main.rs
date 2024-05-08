@@ -200,13 +200,7 @@ impl ClientSession {
     async fn handle_game_message(&mut self, msg: messages::FromGame) -> IoResult<bool> {
         match msg {
             messages::FromGame::StopCommand(force) => {
-                let Some(client_params) = &self.client_params else {
-                    return Ok(false);
-                };
-
-                if force || client_params.close_after_match {
-                    return Ok(false);
-                }
+                return Ok(force || self.client_params.as_ref().map(|x| x.close_after_match).unwrap_or_default());
             }
             messages::FromGame::GameTickPacket(packet) => {
                 if self.client_params.is_some() {
@@ -221,7 +215,7 @@ impl ClientSession {
             }
             messages::FromGame::MatchComm(message) => {
                 let Some(client_params) = &self.client_params else {
-                    return Ok(false);
+                    return Ok(true);
                 };
 
                 if client_params.wants_comms {
@@ -230,7 +224,7 @@ impl ClientSession {
             }
             messages::FromGame::BallPrediction(prediction) => {
                 let Some(client_params) = &self.client_params else {
-                    return Ok(false);
+                    return Ok(true);
                 };
 
                 if client_params.wants_ball_predictions {
