@@ -99,8 +99,8 @@ impl PacketData {
 
         // Ball
         self.flat.ball.physics.location = game_state.ball.pos.to_flat();
-        self.flat.ball.physics.velocity = game_state.ball.pos.to_flat();
-        self.flat.ball.physics.angular_velocity = game_state.ball.pos.to_flat();
+        self.flat.ball.physics.velocity = game_state.ball.vel.to_flat();
+        self.flat.ball.physics.angular_velocity = game_state.ball.ang_vel.to_flat();
         self.flat.ball.physics.rotation = game_state.ball.rot_mat.to_flat();
 
         let mut sphere_shape = Box::<flat::SphereShapeT>::default();
