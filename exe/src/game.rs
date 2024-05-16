@@ -406,10 +406,10 @@ impl<'a> Game<'a> {
                 NEEDS_RESET.store(true, Ordering::Relaxed);
 
                 match car_team {
-                    Team::BLUE => {
+                    Team::Blue => {
                         BLUE_SCORE.fetch_add(1, Ordering::Relaxed);
                     }
-                    Team::ORANGE => {
+                    Team::Orange => {
                         ORANGE_SCORE.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -423,8 +423,8 @@ impl<'a> Game<'a> {
 
         for (i, player) in match_settings.player_configurations.iter().enumerate() {
             let team = match player.team {
-                0 => Team::BLUE,
-                1 => Team::ORANGE,
+                0 => Team::Blue,
+                1 => Team::Orange,
                 _ => unreachable!(),
             };
 
