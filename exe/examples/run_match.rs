@@ -60,11 +60,11 @@ impl<'a> Connection<'a> {
     }
 
     async fn connect(&mut self) -> IoResult<()> {
-        let mut ready_message = flat::ConnectionSettingsT::default();
-        ready_message.wants_ball_predictions = true;
+        let mut connection_settings = flat::ConnectionSettingsT::default();
+        connection_settings.wants_ball_predictions = true;
 
         self.builder.reset();
-        let offset = ready_message.pack(&mut self.builder);
+        let offset = connection_settings.pack(&mut self.builder);
         self.builder.finish(offset, None);
 
         self.send_flatbuffer(SocketDataType::ConnectionSettings)
