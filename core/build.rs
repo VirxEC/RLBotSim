@@ -15,7 +15,10 @@ fn main() -> io::Result<()> {
     set_current_dir(env!("CARGO_MANIFEST_DIR"))?;
 
     let schema_folder = Path::new(SCHEMA_FOLDER);
-    assert!(schema_folder.exists(), "Could not find flatbuffers schema folder");
+    assert!(
+        schema_folder.exists(),
+        "Could not find flatbuffers schema folder"
+    );
 
     let schema_folder_str = schema_folder.display();
 

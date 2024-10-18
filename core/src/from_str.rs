@@ -24,7 +24,9 @@ impl FromStr for GameMode {
             "rumble" => Ok(Self::Rumble),
             "heatseeker" => Ok(Self::Heatseeker),
             "hockey" | "snowday" => Ok(Self::Hockey),
-            _ => Err(Self::Err { name: s.to_string() }),
+            _ => Err(Self::Err {
+                name: s.to_string(),
+            }),
         }
     }
 }

@@ -27,7 +27,8 @@ impl<'a> Connection<'a> {
         self.buffer.clear();
         self.buffer.reserve(4 + flat.len());
 
-        self.buffer.extend_from_slice(&(data_type as u16).to_be_bytes());
+        self.buffer
+            .extend_from_slice(&(data_type as u16).to_be_bytes());
         let size = u16::try_from(flat.len()).expect("Flatbuffer too large");
         self.buffer.extend_from_slice(&size.to_be_bytes());
         self.buffer.extend_from_slice(flat);
@@ -59,14 +60,15 @@ impl<'a> Connection<'a> {
     }
 
     async fn connect(&mut self) -> IoResult<()> {
-        let mut ready_message = flat::ReadyMessageT::default();
+        let mut ready_message = flat::ConnectionSettingsT::default();
         ready_message.wants_ball_predictions = true;
 
         self.builder.reset();
         let offset = ready_message.pack(&mut self.builder);
         self.builder.finish(offset, None);
 
-        self.send_flatbuffer(SocketDataType::ReadyMessage).await?;
+        self.send_flatbuffer(SocketDataType::ConnectionSettings)
+            .await?;
 
         Ok(())
     }
@@ -82,7 +84,7 @@ impl<'a> Connection<'a> {
 
         self.send_flatbuffer(SocketDataType::StartCommand).await?;
 
-        self.wait_for_type(SocketDataType::GameTickPacket).await?;
+        self.wait_for_type(SocketDataType::GamePacket).await?;
         self.wait_for_type(SocketDataType::BallPrediction).await?;
 
         Ok(())

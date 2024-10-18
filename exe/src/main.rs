@@ -1,3 +1,6 @@
+#![forbid(unsafe_code)]
+
+mod agent_res;
 mod game;
 mod messages;
 mod parse;
@@ -14,7 +17,7 @@ use tokio::{
 };
 
 const RLBOT_SOCKETS_PORT: u16 = 23234;
-const DEFAULT_ADDRESS: &str = "127.0.0.1";
+const DEFAULT_ADDRESS: &str = "0.0.0.0";
 
 #[tokio::main]
 async fn main() -> IoResult<()> {
@@ -55,13 +58,17 @@ struct ClientSession {
     client: TcpStream,
     tx: mpsc::Sender<messages::ToGame>,
     rx: broadcast::Receiver<messages::FromGame>,
-    client_params: Option<flat::ReadyMessageT>,
+    client_params: Option<flat::ConnectionSettingsT>,
     buffer: Vec<u8>,
 }
 
 impl ClientSession {
     #[inline]
-    fn new(client: TcpStream, tx: mpsc::Sender<messages::ToGame>, rx: broadcast::Receiver<messages::FromGame>) -> Self {
+    fn new(
+        client: TcpStream,
+        tx: mpsc::Sender<messages::ToGame>,
+        rx: broadcast::Receiver<messages::FromGame>,
+    ) -> Self {
         Self {
             client,
             tx,
@@ -99,7 +106,8 @@ impl ClientSession {
         self.buffer.clear();
         self.buffer.reserve(4 + flat.len());
 
-        self.buffer.extend_from_slice(&(data_type as u16).to_be_bytes());
+        self.buffer
+            .extend_from_slice(&(data_type as u16).to_be_bytes());
         let size = u16::try_from(flat.len()).expect("Flatbuffer too large");
         self.buffer.extend_from_slice(&size.to_be_bytes());
         self.buffer.extend_from_slice(flat);
@@ -126,9 +134,13 @@ impl ClientSession {
                     .blocking_send(messages::ToGame::MatchSettings(match_settings))
                     .unwrap();
             }
-            SocketDataType::ReadyMessage => {
-                let ready_message = root::<flat::ReadyMessage>(&self.buffer).unwrap().unpack();
-                self.client_params.replace(ready_message);
+            SocketDataType::ConnectionSettings => {
+                let connection_settings = root::<flat::ConnectionSettings>(&self.buffer)
+                    .unwrap()
+                    .unpack();
+
+                let agent_id = connection_settings.agent_id.clone();
+                self.client_params.replace(connection_settings);
 
                 let (match_settings_tx, match_settings_rx) = oneshot::channel();
                 self.tx
@@ -142,10 +154,31 @@ impl ClientSession {
                 }
 
                 let (field_info_tx, field_info_rx) = oneshot::channel();
-                self.tx.send(messages::ToGame::FieldInfoRequest(field_info_tx)).await.unwrap();
+                self.tx
+                    .send(messages::ToGame::FieldInfoRequest(field_info_tx))
+                    .await
+                    .unwrap();
 
                 if let Ok(field_info_flat) = field_info_rx.await {
-                    self.buffered_send_flat(SocketDataType::FieldInfo, &field_info_flat).await?;
+                    self.buffered_send_flat(SocketDataType::FieldInfo, &field_info_flat)
+                        .await?;
+                }
+
+                let (controllable_team_info_tx, controllable_team_info_rx) = oneshot::channel();
+                self.tx
+                    .send(messages::ToGame::ControllableTeamInfoRequest(
+                        agent_id,
+                        controllable_team_info_tx,
+                    ))
+                    .await
+                    .unwrap();
+
+                if let Ok(Some(controllable_team_info_flat)) = controllable_team_info_rx.await {
+                    self.buffered_send_flat(
+                        SocketDataType::ControllableTeamInfo,
+                        &controllable_team_info_flat,
+                    )
+                    .await?;
                 }
             }
             SocketDataType::StartCommand => {
@@ -153,7 +186,10 @@ impl ClientSession {
 
                 match file_to_match_settings(start_command.config_path).await {
                     Ok(match_settings) => {
-                        self.tx.send(messages::ToGame::MatchSettings(match_settings)).await.unwrap();
+                        self.tx
+                            .send(messages::ToGame::MatchSettings(match_settings))
+                            .await
+                            .unwrap();
                     }
                     Err(e) => {
                         println!("Error reading match settings: {e}");
@@ -162,32 +198,53 @@ impl ClientSession {
             }
             SocketDataType::PlayerInput => {
                 let input = root::<flat::PlayerInput>(&self.buffer).unwrap().unpack();
-                self.tx.send(messages::ToGame::PlayerInput(input)).await.unwrap();
+                self.tx
+                    .send(messages::ToGame::PlayerInput(input))
+                    .await
+                    .unwrap();
             }
             SocketDataType::DesiredGameState => {
-                let desired_state = root::<flat::DesiredGameState>(&self.buffer).unwrap().unpack();
-                self.tx.send(messages::ToGame::DesiredGameState(desired_state)).await.unwrap();
+                let desired_state = root::<flat::DesiredGameState>(&self.buffer)
+                    .unwrap()
+                    .unpack();
+                self.tx
+                    .send(messages::ToGame::DesiredGameState(desired_state))
+                    .await
+                    .unwrap();
             }
             SocketDataType::RenderGroup => {
                 let group = root::<flat::RenderGroup>(&self.buffer).unwrap().unpack();
-                self.tx.send(messages::ToGame::RenderGroup(group)).await.unwrap();
+                self.tx
+                    .send(messages::ToGame::RenderGroup(group))
+                    .await
+                    .unwrap();
             }
             SocketDataType::RemoveRenderGroup => {
-                let group = root::<flat::RemoveRenderGroup>(&self.buffer).unwrap().unpack();
-                self.tx.send(messages::ToGame::RemoveRenderGroup(group)).await.unwrap();
+                let group = root::<flat::RemoveRenderGroup>(&self.buffer)
+                    .unwrap()
+                    .unpack();
+                self.tx
+                    .send(messages::ToGame::RemoveRenderGroup(group))
+                    .await
+                    .unwrap();
             }
             SocketDataType::MatchComm => {
                 // assert that it's actually a MatchComm message
                 assert!(root::<flat::MatchComm>(&self.buffer).is_ok());
 
                 self.tx
-                    .send(messages::ToGame::MatchComm(self.buffer.clone().into_boxed_slice()))
+                    .send(messages::ToGame::MatchComm(
+                        self.buffer.clone().into_boxed_slice(),
+                    ))
                     .await
                     .unwrap();
             }
             SocketDataType::StopCommand => {
                 let command = root::<flat::StopCommand>(&self.buffer).unwrap().unpack();
-                self.tx.send(messages::ToGame::StopCommand(command)).await.unwrap();
+                self.tx
+                    .send(messages::ToGame::StopCommand(command))
+                    .await
+                    .unwrap();
             }
             i => {
                 println!("Received message type: {i:?}");
@@ -200,18 +257,25 @@ impl ClientSession {
     async fn handle_game_message(&mut self, msg: messages::FromGame) -> IoResult<bool> {
         match msg {
             messages::FromGame::StopCommand(force) => {
-                return Ok(force || self.client_params.as_ref().map(|x| x.close_after_match).unwrap_or_default());
+                return Ok(force
+                    || self
+                        .client_params
+                        .as_ref()
+                        .is_some_and(|x| x.close_after_match));
             }
             messages::FromGame::GameTickPacket(packet) => {
                 if self.client_params.is_some() {
-                    self.buffered_send_flat(SocketDataType::GameTickPacket, &packet).await?;
+                    self.buffered_send_flat(SocketDataType::GamePacket, &packet)
+                        .await?;
                 }
             }
             messages::FromGame::MatchSettings(settings) => {
-                self.buffered_send_flat(SocketDataType::MatchSettings, &settings).await?;
+                self.buffered_send_flat(SocketDataType::MatchSettings, &settings)
+                    .await?;
             }
             messages::FromGame::FieldInfo(field) => {
-                self.buffered_send_flat(SocketDataType::FieldInfo, &field).await?;
+                self.buffered_send_flat(SocketDataType::FieldInfo, &field)
+                    .await?;
             }
             messages::FromGame::MatchComm(message) => {
                 let Some(client_params) = &self.client_params else {
@@ -219,7 +283,8 @@ impl ClientSession {
                 };
 
                 if client_params.wants_comms {
-                    self.buffered_send_flat(SocketDataType::MatchComm, &message).await?;
+                    self.buffered_send_flat(SocketDataType::MatchComm, &message)
+                        .await?;
                 }
             }
             messages::FromGame::BallPrediction(prediction) => {
@@ -228,7 +293,8 @@ impl ClientSession {
                 };
 
                 if client_params.wants_ball_predictions {
-                    self.buffered_send_flat(SocketDataType::BallPrediction, &prediction).await?;
+                    self.buffered_send_flat(SocketDataType::BallPrediction, &prediction)
+                        .await?;
                 }
             }
         }

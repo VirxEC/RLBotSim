@@ -8,7 +8,7 @@ pub use generated::rlbot::flat;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SocketDataType {
     None,
-    GameTickPacket,
+    GamePacket,
     FieldInfo,
     StartCommand,
     MatchSettings,
@@ -18,9 +18,11 @@ pub enum SocketDataType {
     RemoveRenderGroup,
     MatchComm,
     BallPrediction,
-    ReadyMessage,
-    MessagePacket,
+    ConnectionSettings,
     StopCommand,
+    SetLoadout,
+    InitComplete,
+    ControllableTeamInfo,
 }
 
 impl SocketDataType {
@@ -29,7 +31,7 @@ impl SocketDataType {
     pub fn from_u16(data_type: u16) -> Self {
         match data_type {
             0 => Self::None,
-            1 => Self::GameTickPacket,
+            1 => Self::GamePacket,
             2 => Self::FieldInfo,
             3 => Self::StartCommand,
             4 => Self::MatchSettings,
@@ -39,9 +41,11 @@ impl SocketDataType {
             8 => Self::RemoveRenderGroup,
             9 => Self::MatchComm,
             10 => Self::BallPrediction,
-            11 => Self::ReadyMessage,
-            12 => Self::MessagePacket,
-            13 => Self::StopCommand,
+            11 => Self::ConnectionSettings,
+            12 => Self::StopCommand,
+            13 => Self::SetLoadout,
+            14 => Self::InitComplete,
+            15 => Self::ControllableTeamInfo,
             _ => panic!("Invalid socket data type: {}", data_type),
         }
     }

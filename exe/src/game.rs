@@ -1,10 +1,14 @@
 use crate::{
+    agent_res::AgentReservation,
     messages,
     util::{self, FlatToRs, RsToFlat, SetFromPartial},
     viser,
 };
 use async_timer::{interval, Interval};
-use rlbot_sockets::{flat, flatbuffers::FlatBufferBuilder};
+use rlbot_sockets::{
+    flat::{self, BallInfoT, ControllerStateT},
+    flatbuffers::FlatBufferBuilder,
+};
 use rocketsim_rs::{
     consts::DOUBLEJUMP_MAX_DELAY,
     cxx::UniquePtr,
@@ -30,20 +34,20 @@ static ORANGE_SCORE: AtomicU32 = AtomicU32::new(0);
 static NEEDS_RESET: AtomicBool = AtomicBool::new(false);
 
 struct PacketData {
-    flat: flat::GameTickPacketT,
-    state_type: flat::GameStateType,
+    flat: flat::GamePacketT,
+    status: flat::GameStatus,
     extra_car_info: HashMap<usize, (String, u32, i32), ahash::RandomState>,
 }
 
 impl PacketData {
     fn new() -> Self {
-        let mut flat = flat::GameTickPacketT::default();
+        let mut flat = flat::GamePacketT::default();
         flat.teams.resize(2, flat::TeamInfoT::default());
         flat.teams[1].team_index = 1;
 
         Self {
             flat,
-            state_type: flat::GameStateType::Inactive,
+            status: flat::GameStatus::Inactive,
             extra_car_info: HashMap::default(),
         }
     }
@@ -64,16 +68,20 @@ impl PacketData {
     }
 
     #[inline]
-    fn set_state_type(&mut self, state_type: flat::GameStateType) {
-        self.state_type = state_type;
+    fn set_state_type(&mut self, state_type: flat::GameStatus) {
+        self.status = state_type;
     }
 
     #[inline]
-    fn get_state_type(&self) -> flat::GameStateType {
-        self.state_type
+    const fn get_state_type(&self) -> flat::GameStatus {
+        self.status
     }
 
-    fn get_game_tick_packet(&mut self, game_state: &GameState, ball_radius: f32) -> &flat::GameTickPacketT {
+    fn get_game_tick_packet(
+        &mut self,
+        game_state: &GameState,
+        ball_radius: f32,
+    ) -> &flat::GamePacketT {
         // Misc
         self.flat.game_info.game_speed = 1.;
         self.flat.game_info.is_unlimited_time = true;
@@ -81,7 +89,7 @@ impl PacketData {
         self.flat.game_info.world_gravity_z = -650.;
         self.flat.game_info.seconds_elapsed = game_state.tick_count as f32 * GAME_DT;
         self.flat.game_info.frame_num = game_state.tick_count as u32;
-        self.flat.game_info.game_state_type = self.state_type;
+        self.flat.game_info.game_status = self.status;
 
         // teams
         self.flat.teams[0].score = BLUE_SCORE.load(Ordering::Relaxed);
@@ -89,62 +97,36 @@ impl PacketData {
 
         // boost pad states
         self.flat
-            .boost_pad_states
+            .boost_pads
             .resize_with(game_state.pads.len(), Default::default);
 
-        for (flat_pad, rs_pad) in self.flat.boost_pad_states.iter_mut().zip(&game_state.pads) {
+        for (flat_pad, rs_pad) in self.flat.boost_pads.iter_mut().zip(&game_state.pads) {
             flat_pad.is_active = rs_pad.state.is_active;
             flat_pad.timer = rs_pad.state.cooldown;
         }
 
         // Ball
-        self.flat.ball.physics.location = game_state.ball.pos.to_flat();
-        self.flat.ball.physics.velocity = game_state.ball.vel.to_flat();
-        self.flat.ball.physics.angular_velocity = game_state.ball.ang_vel.to_flat();
-        self.flat.ball.physics.rotation = game_state.ball.rot_mat.to_flat();
+        let mut ball = BallInfoT::default();
+        ball.physics.location = game_state.ball.pos.to_flat();
+        ball.physics.velocity = game_state.ball.vel.to_flat();
+        ball.physics.angular_velocity = game_state.ball.ang_vel.to_flat();
+        ball.physics.rotation = game_state.ball.rot_mat.to_flat();
 
         let mut sphere_shape = Box::<flat::SphereShapeT>::default();
         sphere_shape.diameter = ball_radius * 2.;
-        self.flat.ball.shape = flat::CollisionShapeT::SphereShape(sphere_shape);
+        ball.shape = flat::CollisionShapeT::SphereShape(sphere_shape);
 
-        let mut last_ball_touch_time = 0;
-        let mut last_car = None;
-
-        for car in &game_state.cars {
-            if !car.state.ball_hit_info.is_valid {
-                continue;
-            }
-
-            if car.state.ball_hit_info.tick_count_when_hit > last_ball_touch_time {
-                last_car = Some(car);
-                last_ball_touch_time = car.state.ball_hit_info.tick_count_when_hit;
-            }
-        }
-
-        if let Some(car) = last_car {
-            self.flat.ball.latest_touch.location = flat::Vector3T {
-                x: car.state.ball_hit_info.relative_pos_on_ball.x + car.state.pos.x,
-                y: car.state.ball_hit_info.relative_pos_on_ball.y + car.state.pos.y,
-                z: car.state.ball_hit_info.relative_pos_on_ball.z + car.state.pos.z,
-            };
-            self.flat.ball.latest_touch.normal = car.state.ball_hit_info.extra_hit_vel.to_flat();
-            self.flat.ball.latest_touch.game_seconds = last_ball_touch_time as f32 * GAME_DT;
-            self.flat.ball.latest_touch.team = car.team as u32;
-
-            let (&index, name, _) = self
-                .extra_car_info
-                .iter()
-                .map(|(index, (name, car_id, _))| (index, name, *car_id))
-                .find(|(_, _, car_id)| *car_id == car.id)
-                .unwrap();
-
-            self.flat.ball.latest_touch.player_index = index as u32;
-            self.flat.ball.latest_touch.player_name.clone_from(name);
+        if self.flat.balls.is_empty() {
+            self.flat.balls.push(ball);
+        } else {
+            self.flat.balls[0] = ball;
         }
 
         // Cars
         let mut i = 0;
-        self.flat.players.resize_with(self.extra_car_info.len(), Default::default);
+        self.flat
+            .players
+            .resize_with(self.extra_car_info.len(), Default::default);
         while let Some((name, car_id, spawn_id)) = self.extra_car_info.get(&i).cloned() {
             let car = game_state.cars.iter().find(|car| car.id == car_id).unwrap();
 
@@ -161,7 +143,8 @@ impl PacketData {
             player.name = name;
             player.boost = car.state.boost as u32;
             player.is_supersonic =
-                (car.state.pos.x.powi(2) + car.state.pos.y.powi(2) + car.state.pos.z.powi(2)) > 2200f32.powi(2);
+                (car.state.pos.x.powi(2) + car.state.pos.y.powi(2) + car.state.pos.z.powi(2))
+                    > 2200f32.powi(2);
 
             player.hitbox = car.config.hitbox_size.to_flat();
             player.hitbox_offset = car.config.hitbox_pos_offset.to_flat();
@@ -182,6 +165,38 @@ impl PacketData {
             } else {
                 flat::AirState::InAir
             };
+
+            player.latest_touch = if car.state.ball_hit_info.is_valid {
+                let mut hit_info = Box::<flat::TouchT>::default();
+                hit_info.location = flat::Vector3T {
+                    x: car.state.ball_hit_info.relative_pos_on_ball.x + car.state.pos.x,
+                    y: car.state.ball_hit_info.relative_pos_on_ball.y + car.state.pos.y,
+                    z: car.state.ball_hit_info.relative_pos_on_ball.z + car.state.pos.z,
+                };
+                hit_info.normal = car.state.ball_hit_info.extra_hit_vel.to_flat();
+                hit_info.game_seconds =
+                    car.state.ball_hit_info.tick_count_when_hit as f32 * GAME_DT;
+                hit_info.ball_index = 0;
+
+                Some(hit_info)
+            } else {
+                None
+            };
+
+            player.has_jumped = car.state.has_jumped;
+            player.has_double_jumped = car.state.has_double_jumped;
+            player.has_dodged = car.state.has_flipped;
+            player.dodge_elapsed = car.state.flip_time;
+
+            player.last_input = ControllerStateT::default();
+            player.last_input.throttle = car.state.last_controls.throttle;
+            player.last_input.steer = car.state.last_controls.steer;
+            player.last_input.roll = car.state.last_controls.roll;
+            player.last_input.pitch = car.state.last_controls.pitch;
+            player.last_input.yaw = car.state.last_controls.yaw;
+            player.last_input.boost = car.state.last_controls.boost;
+            player.last_input.jump = car.state.last_controls.jump;
+            player.last_input.handbrake = car.state.last_controls.handbrake;
 
             i += 1;
         }
@@ -218,7 +233,11 @@ impl BallPredData {
         };
     }
 
-    fn get_ball_prediction(&mut self, current_ball: BallState, mut num_ticks: u64) -> &flat::BallPredictionT {
+    fn get_ball_prediction(
+        &mut self,
+        current_ball: BallState,
+        mut num_ticks: u64,
+    ) -> &flat::BallPredictionT {
         self.arena.pin_mut().set_ball(current_ball);
 
         for slice in &mut self.flat.slices {
@@ -253,6 +272,7 @@ struct Game<'a> {
     field_info: Option<Box<[u8]>>,
     ball_prediction: BallPredData,
     packet: PacketData,
+    agent_reservation: AgentReservation,
 }
 
 impl<'a> Game<'a> {
@@ -267,11 +287,12 @@ impl<'a> Game<'a> {
             field_info: None,
             ball_prediction: BallPredData::new(),
             packet: PacketData::new(),
+            agent_reservation: AgentReservation::default(),
         }
     }
 
     fn set_state_to_countdown(&mut self) {
-        self.packet.set_state_type(flat::GameStateType::Countdown);
+        self.packet.set_state_type(flat::GameStatus::Countdown);
         self.countdown_end_tick = self.arena.get_tick_count() + 3 * u64::from(GAME_TPS);
     }
 
@@ -299,11 +320,15 @@ impl<'a> Game<'a> {
                 }
 
                 if let Some(field_info) = &self.field_info {
-                    self.tx.send(messages::FromGame::FieldInfo(field_info.clone())).unwrap();
+                    self.tx
+                        .send(messages::FromGame::FieldInfo(field_info.clone()))
+                        .unwrap();
                 }
             }
             messages::ToGame::PlayerInput(input) => {
-                let car_id = self.packet.get_car_id_from_index(input.player_index as usize);
+                let car_id = self
+                    .packet
+                    .get_car_id_from_index(input.player_index as usize);
                 let car_controls = CarControls {
                     throttle: input.controller_state.throttle,
                     steer: input.controller_state.steer,
@@ -315,26 +340,40 @@ impl<'a> Game<'a> {
                     handbrake: input.controller_state.handbrake,
                 };
 
-                self.arena.pin_mut().set_car_controls(car_id, car_controls).unwrap();
+                self.arena
+                    .pin_mut()
+                    .set_car_controls(car_id, car_controls)
+                    .unwrap();
             }
             messages::ToGame::DesiredGameState(desired_state) => {
                 let mut game_state = self.arena.pin_mut().get_game_state();
 
-                if let Some(phys) = desired_state.ball_state.map(|ball| ball.physics) {
+                if let Some(ball) = desired_state.ball_states.into_iter().next() {
+                    let phys = ball.physics;
                     game_state.ball.pos.set_from_partial(phys.location);
                     game_state.ball.vel.set_from_partial(phys.velocity);
-                    game_state.ball.ang_vel.set_from_partial(phys.angular_velocity);
+                    game_state
+                        .ball
+                        .ang_vel
+                        .set_from_partial(phys.angular_velocity);
                     game_state.ball.rot_mat.set_from_partial(phys.rotation);
                 }
 
                 for (i, car) in desired_state.car_states.into_iter().enumerate() {
                     let car_id = self.packet.get_car_id_from_index(i);
-                    let car_state = game_state.cars.iter_mut().find(|car| car.id == car_id).unwrap();
+                    let car_state = game_state
+                        .cars
+                        .iter_mut()
+                        .find(|car| car.id == car_id)
+                        .unwrap();
 
                     if let Some(phys) = car.physics {
                         car_state.state.pos.set_from_partial(phys.location);
                         car_state.state.vel.set_from_partial(phys.velocity);
-                        car_state.state.ang_vel.set_from_partial(phys.angular_velocity);
+                        car_state
+                            .state
+                            .ang_vel
+                            .set_from_partial(phys.angular_velocity);
                         car_state.state.rot_mat.set_from_partial(phys.rotation);
                     }
 
@@ -354,9 +393,9 @@ impl<'a> Game<'a> {
 
                     if let Some(paused) = game_info.paused {
                         self.packet.set_state_type(if paused.val {
-                            flat::GameStateType::Paused
+                            flat::GameStatus::Paused
                         } else {
-                            flat::GameStateType::Active
+                            flat::GameStatus::Active
                         });
                     }
                 }
@@ -368,16 +407,34 @@ impl<'a> Game<'a> {
                 return Ok(ClientState::Render(group.to_rs()));
             }
             messages::ToGame::MatchComm(message) => {
-                self.tx.send(messages::FromGame::MatchComm(message)).unwrap();
+                self.tx
+                    .send(messages::FromGame::MatchComm(message))
+                    .unwrap();
             }
             messages::ToGame::StopCommand(info) => {
-                self.packet.set_state_type(flat::GameStateType::Ended);
+                self.packet.set_state_type(flat::GameStatus::Ended);
 
-                self.tx.send(messages::FromGame::StopCommand(info.shutdown_server)).unwrap();
+                self.tx
+                    .send(messages::FromGame::StopCommand(info.shutdown_server))
+                    .unwrap();
 
                 if info.shutdown_server {
                     return Ok(ClientState::Disconnected);
                 }
+            }
+            messages::ToGame::ControllableTeamInfoRequest(agent_id, tx) => {
+                let msg = if let Some(team_controllable_info) =
+                    self.agent_reservation.reserve_player(&agent_id)
+                {
+                    self.flat_builder.reset();
+                    let offset = team_controllable_info.pack(&mut self.flat_builder);
+                    self.flat_builder.finish(offset, None);
+                    Some(self.flat_builder.finished_data().into())
+                } else {
+                    None
+                };
+
+                tx.send(msg).unwrap();
             }
         }
 
@@ -393,7 +450,6 @@ impl<'a> Game<'a> {
             flat::GameMode::Soccer => Arena::default_standard(),
             flat::GameMode::Hoops => Arena::default_hoops(),
             flat::GameMode::Heatseeker => Arena::default_heatseeker(),
-            // flat::GameMode::Hockey => Arena::default_snowday(),
             _ => unimplemented!(),
         };
 
@@ -419,6 +475,7 @@ impl<'a> Game<'a> {
             0,
         );
 
+        self.agent_reservation.set_players(&match_settings);
         self.packet.clear_extra_car_info();
 
         for (i, player) in match_settings.player_configurations.iter().enumerate() {
@@ -454,7 +511,11 @@ impl<'a> Game<'a> {
             y: -5120.,
             z: 642.775,
         };
-        blue_goal.direction = flat::Vector3T { x: 0., y: 1., z: 0. };
+        blue_goal.direction = flat::Vector3T {
+            x: 0.,
+            y: 1.,
+            z: 0.,
+        };
         blue_goal.width = 892.755;
         blue_goal.height = 642.775;
 
@@ -465,7 +526,11 @@ impl<'a> Game<'a> {
             y: 5120.,
             z: 642.775,
         };
-        orange_goal.direction = flat::Vector3T { x: 0., y: -1., z: 0. };
+        orange_goal.direction = flat::Vector3T {
+            x: 0.,
+            y: -1.,
+            z: 0.,
+        };
         orange_goal.width = 892.755;
         orange_goal.height = 642.775;
 
@@ -475,14 +540,14 @@ impl<'a> Game<'a> {
 
         field_info
             .boost_pads
-            .extend(self.arena.iter_pad_static().map(|(is_full_boost, location)| {
+            .extend(self.arena.iter_pad_config().map(|conf| {
                 let mut boost_pad = flat::BoostPadT::default();
 
-                boost_pad.is_full_boost = is_full_boost;
+                boost_pad.is_full_boost = conf.is_big;
                 boost_pad.location = flat::Vector3T {
-                    x: location.x,
-                    y: location.y,
-                    z: location.z,
+                    x: conf.position.x,
+                    y: conf.position.y,
+                    z: conf.position.z,
                 };
                 boost_pad
             }));
@@ -501,7 +566,7 @@ impl<'a> Game<'a> {
             self.set_state_to_countdown();
         }
 
-        if self.packet.get_state_type() == flat::GameStateType::Countdown {
+        if self.packet.get_state_type() == flat::GameStatus::Countdown {
             let ticks_remaining = self.countdown_end_tick - self.arena.get_tick_count();
             if ticks_remaining % 120 == 0 {
                 println!("Starting in {}s", ticks_remaining / 120);
@@ -510,9 +575,9 @@ impl<'a> Game<'a> {
             self.countdown_end_tick -= 1;
             if self.countdown_end_tick <= self.arena.get_tick_count() {
                 println!("Kickoff!");
-                self.packet.set_state_type(flat::GameStateType::Kickoff);
+                self.packet.set_state_type(flat::GameStatus::Kickoff);
             }
-        } else if self.packet.get_state_type() == flat::GameStateType::Kickoff {
+        } else if self.packet.get_state_type() == flat::GameStatus::Kickoff {
             // check and see if the last touch was after the countdown, then advance to "active"
             for car_id in self.arena.pin_mut().get_cars() {
                 let state = self.arena.pin_mut().get_car(car_id);
@@ -523,13 +588,13 @@ impl<'a> Game<'a> {
 
                 if state.ball_hit_info.tick_count_when_hit > self.countdown_end_tick {
                     println!("Ball touched, game is now active");
-                    self.packet.set_state_type(flat::GameStateType::Active);
+                    self.packet.set_state_type(flat::GameStatus::Active);
                     break;
                 }
             }
 
             self.arena.pin_mut().step(1);
-        } else if self.packet.get_state_type() == flat::GameStateType::Active {
+        } else if self.packet.get_state_type() == flat::GameStatus::Active {
             self.arena.pin_mut().step(1);
         }
 
@@ -537,14 +602,18 @@ impl<'a> Game<'a> {
 
         {
             // construct and send out game tick packet
-            let packet = self.packet.get_game_tick_packet(&game_state, self.arena.get_ball_radius());
+            let packet = self
+                .packet
+                .get_game_tick_packet(&game_state, self.arena.get_ball_radius());
 
             self.flat_builder.reset();
             let offset = packet.pack(&mut self.flat_builder);
             self.flat_builder.finish(offset, None);
             let bytes = self.flat_builder.finished_data();
 
-            let _ = self.tx.send(messages::FromGame::GameTickPacket(bytes.into()));
+            let _ = self
+                .tx
+                .send(messages::FromGame::GameTickPacket(bytes.into()));
         }
 
         {
@@ -557,14 +626,20 @@ impl<'a> Game<'a> {
             self.flat_builder.finish(offset, None);
             let bytes = self.flat_builder.finished_data();
 
-            let _ = self.tx.send(messages::FromGame::BallPrediction(bytes.into()));
+            let _ = self
+                .tx
+                .send(messages::FromGame::BallPrediction(bytes.into()));
         }
 
         game_state
     }
 
     #[tokio::main(worker_threads = 2)]
-    async fn run_with_rlviser(mut self, mut timer: Interval, mut rx: mpsc::Receiver<messages::ToGame>) {
+    async fn run_with_rlviser(
+        mut self,
+        mut timer: Interval,
+        mut rx: mpsc::Receiver<messages::ToGame>,
+    ) {
         let mut rlviser = viser::ExternalManager::new().await.unwrap();
 
         loop {
@@ -595,7 +670,7 @@ impl<'a> Game<'a> {
                             timer = interval(Duration::from_secs_f32(1. / (GAME_TPS as f32 * speed)));
                         }
                         viser::StateControl::Paused(paused) => {
-                            self.packet.set_state_type(if paused { flat::GameStateType::Paused } else { flat::GameStateType::Active });
+                            self.packet.set_state_type(if paused { flat::GameStatus::Paused } else { flat::GameStatus::Active });
                         }
                         viser::StateControl::None => {}
                     }
@@ -608,7 +683,11 @@ impl<'a> Game<'a> {
     }
 
     #[tokio::main(worker_threads = 2)]
-    async fn run_headless(mut self, mut interval: Interval, mut rx: mpsc::Receiver<messages::ToGame>) {
+    async fn run_headless(
+        mut self,
+        mut interval: Interval,
+        mut rx: mpsc::Receiver<messages::ToGame>,
+    ) {
         loop {
             tokio::select! {
                 biased;
@@ -633,7 +712,7 @@ pub fn run_rl(
     shutdown_sender: mpsc::Sender<()>,
     headless: bool,
 ) {
-    init(None);
+    init(None, cfg!(not(debug_assertions)));
 
     let interval = interval(Duration::from_secs_f32(GAME_DT));
     let game = Game::new(tx);

@@ -11,12 +11,11 @@ pub fn auto_start_bots(match_settings: &flat::MatchSettingsT) -> IoResult<()> {
     }
 
     for player in &match_settings.player_configurations {
-        let parts = shlex::split(&player.run_command).unwrap();
+        let mut command = Command::new(if cfg!(windows) { "cmd.exe" } else { "/bin/sh" });
 
-        let mut command = Command::new(&parts[0]);
-        command.env("BOT_SPAWN_ID", &player.spawn_id.to_string());
-        command.current_dir(&player.location);
-        command.args(&parts[1..]);
+        command.env("RLBOT_AGENT_ID", &player.agent_id);
+        command.current_dir(&player.root_dir);
+        command.args([if cfg!(windows) { "/c" } else { "-c" }, &player.run_command]);
 
         command.spawn()?;
     }
@@ -133,8 +132,8 @@ impl FlatToRs<Render> for flat::RenderMessageT {
         match self.variety {
             flat::RenderTypeT::NONE => panic!("Invalid render type NONE"),
             flat::RenderTypeT::Line3D(line) => Render::Line {
-                start: line.start.to_rs(),
-                end: line.end.to_rs(),
+                start: line.start.world.to_rs(),
+                end: line.end.world.to_rs(),
                 color: line.color.to_rs(),
             },
             flat::RenderTypeT::PolyLine3D(polyline) => {
@@ -152,7 +151,13 @@ impl FlatToRs<Render> for flat::RenderMessageT {
 
 impl FlatToRs<RenderMessage> for flat::RenderGroupT {
     fn to_rs(self) -> RenderMessage {
-        RenderMessage::AddRender(self.id, self.render_messages.into_iter().map(FlatToRs::to_rs).collect())
+        RenderMessage::AddRender(
+            self.id,
+            self.render_messages
+                .into_iter()
+                .map(FlatToRs::to_rs)
+                .collect(),
+        )
     }
 }
 

@@ -12,6 +12,7 @@ pub enum ToGame {
     RemoveRenderGroup(flat::RemoveRenderGroupT),
     MatchComm(Box<[u8]>),
     StopCommand(flat::StopCommandT),
+    ControllableTeamInfoRequest(String, oneshot::Sender<Option<Box<[u8]>>>),
 }
 
 #[derive(Clone, Debug)]
@@ -22,5 +23,4 @@ pub enum FromGame {
     FieldInfo(Box<[u8]>),
     MatchComm(Box<[u8]>),
     BallPrediction(Box<[u8]>),
-    // MessagePacket(flat::MessagePacketT),
 }
