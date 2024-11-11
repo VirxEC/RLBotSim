@@ -128,7 +128,7 @@ async fn main() -> IoResult<()> {
     let end_time = Instant::now();
     println!("Time to start match: {:?}", end_time - start_time);
 
-    println!("Measuring time to receive GameTickPackets...");
+    println!("Measuring time to receive GamePackets...");
 
     let mut times = Vec::new();
     let mut num_spkies = 0;
