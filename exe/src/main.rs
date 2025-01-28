@@ -7,9 +7,10 @@ mod parse;
 mod util;
 mod viser;
 
+use clap::Parser;
 use parse::file_to_match_settings;
 use rlbot_sockets::{flat, flatbuffers::root, SocketDataType};
-use std::{env::args, thread};
+use std::thread;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Result as IoResult},
     net::{TcpListener, TcpStream},
@@ -19,16 +20,23 @@ use tokio::{
 const RLBOT_SOCKETS_PORT: u16 = 23234;
 const DEFAULT_ADDRESS: &str = "0.0.0.0";
 
+#[derive(Parser)]
+#[command(version)]
+struct Cli {
+    #[clap(long)]
+    headless: bool,
+}
+
 #[tokio::main]
 async fn main() -> IoResult<()> {
-    let headless = args().skip(1).any(|arg| arg == "--no-rlviser");
+    let cli = Cli::parse();
 
     let (game_tx_hold, _) = broadcast::channel(63);
     let (tx, game_rx) = mpsc::channel(31);
     let (shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
 
     let game_tx = game_tx_hold.clone();
-    thread::spawn(move || game::run_rl(game_tx, game_rx, shutdown_sender, headless));
+    thread::spawn(move || game::run_rl(game_tx, game_rx, shutdown_sender, cli.headless));
 
     let tcp_connection = TcpListener::bind((DEFAULT_ADDRESS, RLBOT_SOCKETS_PORT)).await?;
     println!("Server listening on port {RLBOT_SOCKETS_PORT}");
@@ -128,7 +136,7 @@ impl ClientSession {
                 println!("Received None message type, closing connection");
                 return Ok(false);
             }
-            SocketDataType::MatchSettings => {
+            SocketDataType::MatchConfig => {
                 let match_settings = root::<flat::MatchConfiguration>(&self.buffer)
                     .unwrap()
                     .unpack();
@@ -151,7 +159,7 @@ impl ClientSession {
                     .unwrap();
 
                 if let Ok(match_settings_flat) = match_settings_rx.await {
-                    self.buffered_send_flat(SocketDataType::MatchSettings, &match_settings_flat)
+                    self.buffered_send_flat(SocketDataType::MatchConfig, &match_settings_flat)
                         .await?;
                 }
 
@@ -272,7 +280,7 @@ impl ClientSession {
                 }
             }
             messages::FromGame::MatchSettings(settings) => {
-                self.buffered_send_flat(SocketDataType::MatchSettings, &settings)
+                self.buffered_send_flat(SocketDataType::MatchConfig, &settings)
                     .await?;
             }
             messages::FromGame::FieldInfo(field) => {

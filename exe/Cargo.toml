@@ -13,6 +13,7 @@ thiserror = "2.0.3"
 toml = "0.8.10"
 ahash = "0.8.10"
 async-timer = { version = "1.0.0-beta.15", features = ["tokio1"] }
+clap = { version = "4.5.27", features = ["derive"] }
 
 [lints.clippy]
 all = "warn"

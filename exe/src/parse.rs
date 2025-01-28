@@ -98,7 +98,10 @@ pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchConfigu
         let wrapped_hash = full_hash % (i32::MAX as i64);
         player.spawn_id = wrapped_hash as i32;
 
-        let root_dir = settings_header.get("root_dir").and_then(Value::as_str).unwrap_or_default();
+        let root_dir = settings_header
+            .get("root_dir")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         player.root_dir = config_path_parent
             .join(root_dir)
             .to_string_lossy()
