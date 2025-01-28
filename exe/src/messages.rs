@@ -5,7 +5,7 @@ use tokio::sync::oneshot;
 pub enum ToGame {
     FieldInfoRequest(oneshot::Sender<Box<[u8]>>),
     MatchSettingsRequest(oneshot::Sender<Box<[u8]>>),
-    MatchSettings(flat::MatchSettingsT),
+    MatchSettings(flat::MatchConfigurationT),
     PlayerInput(flat::PlayerInputT),
     DesiredGameState(flat::DesiredGameStateT),
     RenderGroup(flat::RenderGroupT),

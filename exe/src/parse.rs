@@ -8,7 +8,7 @@ use std::{
 use tokio::fs;
 use toml::{map::Map, Value};
 
-pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchSettingsT> {
+pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchConfigurationT> {
     let empty_map = Map::new();
     let empty_vec = Vec::new();
 
@@ -18,7 +18,7 @@ pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchSetting
         .parse::<toml::Table>()
         .unwrap_or_else(|_| empty_map.clone());
 
-    let mut settings = flat::MatchSettingsT::default();
+    let mut settings = flat::MatchConfigurationT::default();
 
     let rlbot_header = toml
         .get("rlbot")
@@ -55,7 +55,7 @@ pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchSetting
     for car in &cars_header[0..cars_header.len()] {
         let mut player = flat::PlayerConfigurationT::default();
 
-        player.variety = flat::PlayerClassT::RLBot(Box::default());
+        player.variety = flat::PlayerClassT::CustomBot(Box::default());
 
         let player_team = car["team"].as_integer().unwrap_or_default();
         player.team = player_team as u32;
@@ -98,7 +98,7 @@ pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchSetting
         let wrapped_hash = full_hash % (i32::MAX as i64);
         player.spawn_id = wrapped_hash as i32;
 
-        let root_dir = settings_header["root_dir"].as_str().unwrap_or_default();
+        let root_dir = settings_header.get("root_dir").and_then(Value::as_str).unwrap_or_default();
         player.root_dir = config_path_parent
             .join(root_dir)
             .to_string_lossy()

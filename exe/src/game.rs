@@ -35,7 +35,7 @@ static NEEDS_RESET: AtomicBool = AtomicBool::new(false);
 
 struct PacketData {
     flat: flat::GamePacketT,
-    status: flat::GameStatus,
+    status: flat::MatchPhase,
     extra_car_info: HashMap<usize, (String, u32, i32), ahash::RandomState>,
 }
 
@@ -47,7 +47,7 @@ impl PacketData {
 
         Self {
             flat,
-            status: flat::GameStatus::Inactive,
+            status: flat::MatchPhase::Inactive,
             extra_car_info: HashMap::default(),
         }
     }
@@ -68,12 +68,12 @@ impl PacketData {
     }
 
     #[inline]
-    fn set_state_type(&mut self, state_type: flat::GameStatus) {
+    fn set_state_type(&mut self, state_type: flat::MatchPhase) {
         self.status = state_type;
     }
 
     #[inline]
-    const fn get_state_type(&self) -> flat::GameStatus {
+    const fn get_state_type(&self) -> flat::MatchPhase {
         self.status
     }
 
@@ -83,13 +83,13 @@ impl PacketData {
         ball_radius: f32,
     ) -> &flat::GamePacketT {
         // Misc
-        self.flat.game_info.game_speed = 1.;
-        self.flat.game_info.is_unlimited_time = true;
-        self.flat.game_info.is_overtime = false;
-        self.flat.game_info.world_gravity_z = -650.;
-        self.flat.game_info.seconds_elapsed = game_state.tick_count as f32 * GAME_DT;
-        self.flat.game_info.frame_num = game_state.tick_count as u32;
-        self.flat.game_info.game_status = self.status;
+        self.flat.match_info.game_speed = 1.;
+        self.flat.match_info.is_unlimited_time = true;
+        self.flat.match_info.is_overtime = false;
+        self.flat.match_info.world_gravity_z = -650.;
+        self.flat.match_info.seconds_elapsed = game_state.tick_count as f32 * GAME_DT;
+        self.flat.match_info.frame_num = game_state.tick_count as u32;
+        self.flat.match_info.match_phase = self.status;
 
         // teams
         self.flat.teams[0].score = BLUE_SCORE.load(Ordering::Relaxed);
@@ -268,14 +268,14 @@ struct Game<'a> {
     tx: broadcast::Sender<messages::FromGame>,
     flat_builder: FlatBufferBuilder<'a>,
     countdown_end_tick: u64,
-    match_settings: Option<(flat::MatchSettingsT, Box<[u8]>)>,
+    match_settings: Option<(flat::MatchConfigurationT, Box<[u8]>)>,
     field_info: Option<Box<[u8]>>,
     ball_prediction: BallPredData,
     packet: PacketData,
     agent_reservation: AgentReservation,
 }
 
-impl<'a> Game<'a> {
+impl Game<'_> {
     #[inline]
     fn new(tx: broadcast::Sender<messages::FromGame>) -> Self {
         Self {
@@ -292,7 +292,7 @@ impl<'a> Game<'a> {
     }
 
     fn set_state_to_countdown(&mut self) {
-        self.packet.set_state_type(flat::GameStatus::Countdown);
+        self.packet.set_state_type(flat::MatchPhase::Countdown);
         self.countdown_end_tick = self.arena.get_tick_count() + 3 * u64::from(GAME_TPS);
     }
 
@@ -384,19 +384,11 @@ impl<'a> Game<'a> {
 
                 self.set_state(&game_state);
 
-                if let Some(game_info) = desired_state.game_info_state {
+                if let Some(game_info) = desired_state.match_info {
                     if let Some(gravity_z) = game_info.world_gravity_z {
                         let mut mutators = self.arena.get_mutator_config();
                         mutators.gravity.z = gravity_z.val;
                         self.arena.pin_mut().set_mutator_config(mutators);
-                    }
-
-                    if let Some(paused) = game_info.paused {
-                        self.packet.set_state_type(if paused.val {
-                            flat::GameStatus::Paused
-                        } else {
-                            flat::GameStatus::Active
-                        });
                     }
                 }
             }
@@ -412,7 +404,7 @@ impl<'a> Game<'a> {
                     .unwrap();
             }
             messages::ToGame::StopCommand(info) => {
-                self.packet.set_state_type(flat::GameStatus::Ended);
+                self.packet.set_state_type(flat::MatchPhase::Ended);
 
                 self.tx
                     .send(messages::FromGame::StopCommand(info.shutdown_server))
@@ -445,7 +437,7 @@ impl<'a> Game<'a> {
         self.arena.pin_mut().set_game_state(game_state).unwrap();
     }
 
-    fn set_match_settings(&mut self, match_settings: flat::MatchSettingsT) {
+    fn set_match_settings(&mut self, match_settings: flat::MatchConfigurationT) {
         self.arena = match match_settings.game_mode {
             flat::GameMode::Soccer => Arena::default_standard(),
             flat::GameMode::Hoops => Arena::default_hoops(),
@@ -566,7 +558,7 @@ impl<'a> Game<'a> {
             self.set_state_to_countdown();
         }
 
-        if self.packet.get_state_type() == flat::GameStatus::Countdown {
+        if self.packet.get_state_type() == flat::MatchPhase::Countdown {
             let ticks_remaining = self.countdown_end_tick - self.arena.get_tick_count();
             if ticks_remaining % 120 == 0 {
                 println!("Starting in {}s", ticks_remaining / 120);
@@ -575,9 +567,9 @@ impl<'a> Game<'a> {
             self.countdown_end_tick -= 1;
             if self.countdown_end_tick <= self.arena.get_tick_count() {
                 println!("Kickoff!");
-                self.packet.set_state_type(flat::GameStatus::Kickoff);
+                self.packet.set_state_type(flat::MatchPhase::Kickoff);
             }
-        } else if self.packet.get_state_type() == flat::GameStatus::Kickoff {
+        } else if self.packet.get_state_type() == flat::MatchPhase::Kickoff {
             // check and see if the last touch was after the countdown, then advance to "active"
             for car_id in self.arena.pin_mut().get_cars() {
                 let state = self.arena.pin_mut().get_car(car_id);
@@ -588,13 +580,13 @@ impl<'a> Game<'a> {
 
                 if state.ball_hit_info.tick_count_when_hit > self.countdown_end_tick {
                     println!("Ball touched, game is now active");
-                    self.packet.set_state_type(flat::GameStatus::Active);
+                    self.packet.set_state_type(flat::MatchPhase::Active);
                     break;
                 }
             }
 
             self.arena.pin_mut().step(1);
-        } else if self.packet.get_state_type() == flat::GameStatus::Active {
+        } else if self.packet.get_state_type() == flat::MatchPhase::Active {
             self.arena.pin_mut().step(1);
         }
 
@@ -670,7 +662,7 @@ impl<'a> Game<'a> {
                             timer = interval(Duration::from_secs_f32(1. / (GAME_TPS as f32 * speed)));
                         }
                         viser::StateControl::Paused(paused) => {
-                            self.packet.set_state_type(if paused { flat::GameStatus::Paused } else { flat::GameStatus::Active });
+                            self.packet.set_state_type(if paused { flat::MatchPhase::Paused } else { flat::MatchPhase::Active });
                         }
                         viser::StateControl::None => {}
                     }

@@ -6,8 +6,9 @@ const SCHEMA_FOLDER: &str = "./flatbuffers-schema";
 
 fn main() -> io::Result<()> {
     println!("cargo:rerun-if-changed=flatbuffers-schema/comms.fbs");
-    println!("cargo:rerun-if-changed=flatbuffers-schema/gamestate.fbs");
-    println!("cargo:rerun-if-changed=flatbuffers-schema/matchstart.fbs");
+    println!("cargo:rerun-if-changed=flatbuffers-schema/gamedata.fbs");
+    println!("cargo:rerun-if-changed=flatbuffers-schema/gamestatemanip.fbs");
+    println!("cargo:rerun-if-changed=flatbuffers-schema/matchconfig.fbs");
     println!("cargo:rerun-if-changed=flatbuffers-schema/rendering.fbs");
     println!("cargo:rerun-if-changed=flatbuffers-schema/rlbot.fbs");
 

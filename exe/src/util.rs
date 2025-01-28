@@ -5,7 +5,7 @@ use rocketsim_rs::{
 };
 use std::{io::Result as IoResult, process::Command};
 
-pub fn auto_start_bots(match_settings: &flat::MatchSettingsT) -> IoResult<()> {
+pub fn auto_start_bots(match_settings: &flat::MatchConfigurationT) -> IoResult<()> {
     if !match_settings.auto_start_bots {
         return Ok(());
     }

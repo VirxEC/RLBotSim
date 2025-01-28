@@ -129,7 +129,9 @@ impl ClientSession {
                 return Ok(false);
             }
             SocketDataType::MatchSettings => {
-                let match_settings = root::<flat::MatchSettings>(&self.buffer).unwrap().unpack();
+                let match_settings = root::<flat::MatchConfiguration>(&self.buffer)
+                    .unwrap()
+                    .unpack();
                 self.tx
                     .blocking_send(messages::ToGame::MatchSettings(match_settings))
                     .unwrap();
@@ -261,7 +263,7 @@ impl ClientSession {
                     || self
                         .client_params
                         .as_ref()
-                        .is_some_and(|x| x.close_after_match));
+                        .is_some_and(|x| x.close_between_matches));
             }
             messages::FromGame::GameTickPacket(packet) => {
                 if self.client_params.is_some() {

@@ -14,7 +14,7 @@ pub struct AgentReservation {
 }
 
 impl AgentReservation {
-    pub fn set_players(&mut self, match_settings: &flat::MatchSettingsT) {
+    pub fn set_players(&mut self, match_settings: &flat::MatchConfigurationT) {
         self.known_players.clear();
 
         let mut index_offset = 0;
@@ -22,7 +22,7 @@ impl AgentReservation {
         for (i, player) in match_settings.player_configurations.iter().enumerate() {
             match player.variety.player_class_type() {
                 flat::PlayerClass::Human => index_offset += 1,
-                flat::PlayerClass::RLBot => {
+                flat::PlayerClass::CustomBot => {
                     let index = i as u32 - index_offset;
 
                     self.known_players.push(PlayerMetadata {

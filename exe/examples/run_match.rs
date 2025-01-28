@@ -12,7 +12,7 @@ struct Connection<'a> {
     buffer: Vec<u8>,
 }
 
-impl<'a> Connection<'a> {
+impl Connection<'_> {
     async fn new() -> IoResult<Self> {
         Ok(Self {
             tcp: TcpStream::connect("127.0.0.1:23234").await?,
