@@ -3,29 +3,6 @@ use rocketsim_rs::{
     math::{Angle, RotMat, Vec3},
     render::{Color, Render, RenderMessage},
 };
-use std::{io::Result as IoResult, process::Command};
-
-pub fn auto_start_bots(
-    match_settings: &flat::MatchConfigurationT,
-    rlbot_port: u16,
-) -> IoResult<()> {
-    if !match_settings.auto_start_bots {
-        return Ok(());
-    }
-
-    for player in &match_settings.player_configurations {
-        let mut command = Command::new(if cfg!(windows) { "cmd.exe" } else { "/bin/sh" });
-
-        command.env("RLBOT_SERVER_PORT", rlbot_port.to_string());
-        command.env("RLBOT_AGENT_ID", &player.agent_id);
-        command.current_dir(&player.root_dir);
-        command.args([if cfg!(windows) { "/c" } else { "-c" }, &player.run_command]);
-
-        command.spawn()?;
-    }
-
-    Ok(())
-}
 
 pub trait RsToFlat<T> {
     fn to_flat(self) -> T;

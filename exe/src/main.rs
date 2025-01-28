@@ -1,14 +1,9 @@
 #![forbid(unsafe_code)]
 
-mod agent_res;
-mod game;
 mod messages;
-mod parse;
-mod util;
-mod viser;
+mod utils;
 
 use clap::{Parser, Subcommand};
-use parse::file_to_match_settings;
 use rlbot_sockets::{flat, flatbuffers::root, SocketDataType};
 use std::{net::Ipv4Addr, path::Path, thread};
 use tokio::{
@@ -16,6 +11,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{broadcast, mpsc, oneshot},
 };
+use utils::{game, parse::file_to_match_settings};
 
 const RLVISER_PATH: &str = if cfg!(windows) {
     "./rlviser.exe"
