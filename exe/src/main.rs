@@ -7,24 +7,65 @@ mod parse;
 mod util;
 mod viser;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use parse::file_to_match_settings;
 use rlbot_sockets::{flat, flatbuffers::root, SocketDataType};
-use std::thread;
+use std::{net::Ipv4Addr, path::Path, thread};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Result as IoResult},
     net::{TcpListener, TcpStream},
     sync::{broadcast, mpsc, oneshot},
 };
 
-const RLBOT_SOCKETS_PORT: u16 = 23234;
-const DEFAULT_ADDRESS: &str = "0.0.0.0";
+const RLVISER_PATH: &str = if cfg!(windows) {
+    "./rlviser.exe"
+} else {
+    "./rlviser"
+};
+
+const RLBOT_PORT: u16 = 23234;
+const RLVISER_PORT: u16 = 23235;
+const ROCKETSIM_PORT: u16 = 23236;
+
+fn valid_path(s: &str) -> Result<String, String> {
+    if Path::new(s).exists() {
+        Ok(s.to_string())
+    } else {
+        Err(format!("Path `{s}` does not exist"))
+    }
+}
 
 #[derive(Parser)]
-#[command(version)]
+#[command(version, about, long_about = None)]
 struct Cli {
-    #[clap(long)]
-    headless: bool,
+    #[command(subcommand)]
+    commands: Option<Commands>,
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..), default_value_t = RLBOT_PORT)]
+    rlbot_port: u16,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    #[command(name = "rlviser")]
+    RLViser {
+        #[arg(long, value_parser = valid_path, default_value = RLVISER_PATH)]
+        rlviser_path: String,
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..), default_value_t = RLVISER_PORT)]
+        rlviser_port: u16,
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..), default_value_t = ROCKETSIM_PORT)]
+        rocketsim_port: u16,
+    },
+    Headless,
+}
+
+impl Default for Commands {
+    fn default() -> Self {
+        Commands::RLViser {
+            rlviser_path: RLVISER_PATH.to_string(),
+            rlviser_port: RLVISER_PORT,
+            rocketsim_port: ROCKETSIM_PORT,
+        }
+    }
 }
 
 #[tokio::main]
@@ -36,10 +77,26 @@ async fn main() -> IoResult<()> {
     let (shutdown_sender, mut shutdown_receiver) = mpsc::channel(1);
 
     let game_tx = game_tx_hold.clone();
-    thread::spawn(move || game::run_rl(game_tx, game_rx, shutdown_sender, cli.headless));
 
-    let tcp_connection = TcpListener::bind((DEFAULT_ADDRESS, RLBOT_SOCKETS_PORT)).await?;
-    println!("Server listening on port {RLBOT_SOCKETS_PORT}");
+    if cli.commands.is_none() {
+        assert!(
+            Path::new(RLVISER_PATH).exists(),
+            "Path `{RLVISER_PATH}` does not exist"
+        );
+    }
+
+    thread::spawn(move || {
+        game::run_rl(
+            game_tx,
+            game_rx,
+            shutdown_sender,
+            cli.rlbot_port,
+            cli.commands.unwrap_or_default(),
+        )
+    });
+
+    let tcp_connection = TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), cli.rlbot_port)).await?;
+    println!("Server listening on port {}", cli.rlbot_port);
 
     loop {
         tokio::select! {

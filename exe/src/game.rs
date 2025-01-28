@@ -2,7 +2,7 @@ use crate::{
     agent_res::AgentReservation,
     messages,
     util::{self, FlatToRs, RsToFlat, SetFromPartial},
-    viser,
+    viser, Commands,
 };
 use async_timer::{interval, Interval};
 use rlbot_sockets::{
@@ -20,6 +20,7 @@ use rocketsim_rs::{
 use std::{
     collections::HashMap,
     io::Result as IoResult,
+    path::Path,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
     time::Duration,
 };
@@ -264,8 +265,9 @@ enum ClientState {
 }
 
 struct Game<'a> {
-    arena: UniquePtr<Arena>,
+    rlbot_port: u16,
     tx: broadcast::Sender<messages::FromGame>,
+    arena: UniquePtr<Arena>,
     flat_builder: FlatBufferBuilder<'a>,
     countdown_end_tick: u64,
     match_settings: Option<(flat::MatchConfigurationT, Box<[u8]>)>,
@@ -277,9 +279,10 @@ struct Game<'a> {
 
 impl Game<'_> {
     #[inline]
-    fn new(tx: broadcast::Sender<messages::FromGame>) -> Self {
+    fn new(tx: broadcast::Sender<messages::FromGame>, rlbot_port: u16) -> Self {
         Self {
             tx,
+            rlbot_port,
             arena: Arena::default_standard(),
             flat_builder: FlatBufferBuilder::with_capacity(10240),
             countdown_end_tick: 0,
@@ -309,7 +312,7 @@ impl Game<'_> {
                 }
             }
             messages::ToGame::MatchSettings(match_settings) => {
-                util::auto_start_bots(&match_settings)?;
+                util::auto_start_bots(&match_settings, self.rlbot_port)?;
                 self.set_match_settings(match_settings);
                 self.set_field_info();
 
@@ -631,8 +634,13 @@ impl Game<'_> {
         mut self,
         mut timer: Interval,
         mut rx: mpsc::Receiver<messages::ToGame>,
+        rlviser_path: &Path,
+        rlviser_port: u16,
+        rocketsim_port: u16,
     ) {
-        let mut rlviser = viser::ExternalManager::new().await.unwrap();
+        let mut rlviser = viser::ExternalManager::new(rlviser_path, rlviser_port, rocketsim_port)
+            .await
+            .unwrap();
 
         loop {
             tokio::select! {
@@ -702,17 +710,31 @@ pub fn run_rl(
     tx: broadcast::Sender<messages::FromGame>,
     rx: mpsc::Receiver<messages::ToGame>,
     shutdown_sender: mpsc::Sender<()>,
-    headless: bool,
+    rlbot_port: u16,
+    commands: Commands,
 ) {
     init(None, cfg!(not(debug_assertions)));
 
     let interval = interval(Duration::from_secs_f32(GAME_DT));
-    let game = Game::new(tx);
+    let game = Game::new(tx, rlbot_port);
 
-    if headless {
-        game.run_headless(interval, rx);
-    } else {
-        game.run_with_rlviser(interval, rx);
+    match commands {
+        Commands::RLViser {
+            rlviser_path,
+            rlviser_port,
+            rocketsim_port,
+        } => {
+            game.run_with_rlviser(
+                interval,
+                rx,
+                Path::new(&rlviser_path),
+                rlviser_port,
+                rocketsim_port,
+            );
+        }
+        Commands::Headless => {
+            game.run_headless(interval, rx);
+        }
     }
 
     println!("Shutting down RocketSim");

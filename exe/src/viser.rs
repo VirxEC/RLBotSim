@@ -6,20 +6,10 @@ use rocketsim_rs::{
 use std::{
     io::Result as IoResult,
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::Path,
     process::Command,
 };
 use tokio::net::UdpSocket;
-
-const RLVISER_PATH: &str = if cfg!(windows) {
-    "./rlviser.exe"
-} else {
-    "./rlviser"
-};
-const RLVISER_PORT: u16 = 45243;
-const ROCKETSIM_PORT: u16 = 34254;
-
-const RLVISER_ADDR: SocketAddr =
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), RLVISER_PORT);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
@@ -54,37 +44,46 @@ pub enum StateControl {
 }
 
 pub struct ExternalManager {
+    rlviser_addr: SocketAddr,
     socket: UdpSocket,
     buffer: Vec<u8>,
 }
 
 impl ExternalManager {
-    pub async fn new() -> IoResult<Self> {
-        Command::new(RLVISER_PATH)
+    pub async fn new(
+        rlviser_path: &Path,
+        rlviser_port: u16,
+        rocketsim_port: u16,
+    ) -> IoResult<Self> {
+        Command::new(rlviser_path.canonicalize()?)
+            .args([rocketsim_port.to_string(), rlviser_port.to_string()])
             .env("CARGO_MANIFEST_DIR", "")
             .spawn()?;
 
         Ok(Self {
-            socket: UdpSocket::bind(("0.0.0.0", ROCKETSIM_PORT)).await?,
+            rlviser_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), rlviser_port),
+            socket: UdpSocket::bind((Ipv4Addr::new(0, 0, 0, 0), rocketsim_port)).await?,
             buffer: Vec::with_capacity(1024),
         })
     }
 
     pub async fn send_render_group(&self, group: RenderMessage) -> IoResult<()> {
         self.socket
-            .send_to(&[UdpPacketTypes::Render as u8], RLVISER_ADDR)
+            .send_to(&[UdpPacketTypes::Render as u8], self.rlviser_addr)
             .await?;
-        self.socket.send_to(&group.to_bytes(), RLVISER_ADDR).await?;
+        self.socket
+            .send_to(&group.to_bytes(), self.rlviser_addr)
+            .await?;
 
         Ok(())
     }
 
     pub async fn send_game_state(&self, game_state: &GameState) -> IoResult<()> {
         self.socket
-            .send_to(&[UdpPacketTypes::GameState as u8], RLVISER_ADDR)
+            .send_to(&[UdpPacketTypes::GameState as u8], self.rlviser_addr)
             .await?;
         self.socket
-            .send_to(&game_state.to_bytes(), RLVISER_ADDR)
+            .send_to(&game_state.to_bytes(), self.rlviser_addr)
             .await?;
 
         Ok(())
@@ -131,7 +130,7 @@ impl ExternalManager {
 
     pub async fn close(&self) -> IoResult<()> {
         self.socket
-            .send_to(&[UdpPacketTypes::Quit as u8], RLVISER_ADDR)
+            .send_to(&[UdpPacketTypes::Quit as u8], self.rlviser_addr)
             .await?;
         println!("Sent quit signal to rlviser");
 
