@@ -4,7 +4,7 @@ mod messages;
 mod utils;
 
 use clap::{Parser, Subcommand};
-use rlbot_sockets::{flat, flatbuffers::root, SocketDataType};
+use rlbot_sockets::{SocketDataType, flat, flatbuffers::root};
 use std::{net::Ipv4Addr, path::Path, thread};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Result as IoResult},
@@ -56,7 +56,7 @@ pub enum Commands {
 
 impl Default for Commands {
     fn default() -> Self {
-        Commands::RLViser {
+        Self::RLViser {
             rlviser_path: RLVISER_PATH.to_string(),
             rlviser_port: RLVISER_PORT,
             rocketsim_port: ROCKETSIM_PORT,
@@ -88,7 +88,7 @@ async fn main() -> IoResult<()> {
             shutdown_sender,
             cli.rlbot_port,
             cli.commands.unwrap_or_default(),
-        )
+        );
     });
 
     let tcp_connection = TcpListener::bind((Ipv4Addr::new(0, 0, 0, 0), cli.rlbot_port)).await?;

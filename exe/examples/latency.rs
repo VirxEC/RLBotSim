@@ -1,4 +1,4 @@
-use rlbot_sockets::{flat, flatbuffers::FlatBufferBuilder, SocketDataType};
+use rlbot_sockets::{SocketDataType, flat, flatbuffers::FlatBufferBuilder};
 use std::{
     io::{Result as IoResult, Write},
     time::{Duration, Instant},

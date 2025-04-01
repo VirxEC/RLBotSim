@@ -31,9 +31,9 @@ impl AgentReservation {
                         team: player.team,
                         agent_id: player.agent_id.clone(),
                         is_reserved: false,
-                    })
+                    });
                 }
-                _ => continue,
+                _ => {},
             }
         }
     }

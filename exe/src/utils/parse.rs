@@ -6,7 +6,7 @@ use std::{
     path::Path,
 };
 use tokio::fs;
-use toml::{map::Map, Value};
+use toml::{Value, map::Map};
 
 pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchConfigurationT> {
     let empty_map = Map::new();
@@ -95,7 +95,7 @@ pub async fn file_to_match_settings(path: String) -> IoResult<flat::MatchConfigu
 
         player.name.hash(&mut spawn_id_hasher);
         let full_hash = spawn_id_hasher.finish() as i64;
-        let wrapped_hash = full_hash % (i32::MAX as i64);
+        let wrapped_hash = full_hash % i64::from(i32::MAX);
         player.spawn_id = wrapped_hash as i32;
 
         let root_dir = settings_header

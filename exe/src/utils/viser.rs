@@ -1,7 +1,7 @@
 use rocketsim_rs::{
+    GameState,
     bytes::{FromBytes, FromBytesExact, ToBytes},
     render::RenderMessage,
-    GameState,
 };
 use std::{
     io::Result as IoResult,

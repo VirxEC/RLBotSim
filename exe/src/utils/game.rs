@@ -1,24 +1,23 @@
 use crate::{
-    messages,
+    Commands, messages,
     utils::{
         agent_res::AgentReservation,
         conv::{FlatToRs, RsToFlat, SetFromPartial},
         viser,
     },
-    Commands,
 };
-use async_timer::{interval, Interval};
+use async_timer::{Interval, interval};
 use rlbot_sockets::{
     flat::{self, BallInfoT, ControllerStateT},
     flatbuffers::FlatBufferBuilder,
 };
 use rocketsim_rs::{
+    GameState,
     consts::DOUBLEJUMP_MAX_DELAY,
     cxx::UniquePtr,
     init,
     render::RenderMessage,
     sim::{Arena, BallState, CarConfig, CarControls, Team},
-    GameState,
 };
 use std::{
     collections::HashMap,
@@ -92,7 +91,7 @@ impl PacketData {
     }
 
     #[inline]
-    fn set_state_type(&mut self, state_type: flat::MatchPhase) {
+    const fn set_state_type(&mut self, state_type: flat::MatchPhase) {
         self.status = state_type;
     }
 
@@ -165,9 +164,9 @@ impl PacketData {
             player.spawn_id = spawn_id;
             player.is_bot = true;
             player.name = name;
-            player.boost = car.state.boost as u32;
+            player.boost = car.state.boost;
             player.is_supersonic =
-                (car.state.pos.x.powi(2) + car.state.pos.y.powi(2) + car.state.pos.z.powi(2))
+                car.state.pos.z.mul_add(car.state.pos.z, car.state.pos.y.mul_add(car.state.pos.y, car.state.pos.x.powi(2)))
                     > 2200f32.powi(2);
 
             player.hitbox = car.config.hitbox_size.to_flat();
@@ -690,7 +689,7 @@ impl Game<'_> {
                             self.set_state(&game_state);
                         }
                         viser::StateControl::Speed(speed) => {
-                            timer = interval(Duration::from_secs_f32(1. / (GAME_TPS as f32 * speed)));
+                            timer = interval(Duration::from_secs_f32(1. / (f32::from(GAME_TPS) * speed)));
                         }
                         viser::StateControl::Paused(paused) => {
                             self.packet.set_state_type(if paused { flat::MatchPhase::Paused } else { flat::MatchPhase::Active });
