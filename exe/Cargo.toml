@@ -13,7 +13,7 @@ rlbot_flat = { git = "https://github.com/RLBot/rust-interface.git", rev = "80aa0
 tokio = { version = "1.36.0", features = ["macros", "rt", "net", "io-util"] }
 thiserror = "2.0.3"
 async-timer = { version = "1.0.0-beta.15", features = ["tokio1"] }
-clap = { version = "4.5.27", features = ["derive"] }
+clap = { version = "4.5.27", features = ["color", "derive"] }
 
 [lints.rust]
 unsafe_code = "forbid"
