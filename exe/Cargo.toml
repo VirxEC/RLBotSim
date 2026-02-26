@@ -1,20 +1,22 @@
 [package]
-name = "rlbot_server_sim"
-version = "0.1.0"
-edition = "2024"
-description = "A re-implementation of the RLBotServer in Rust using RocketSim"
+name = "rlbot_sim"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+description = "A backend for RLBotServer running RocketSim"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocketsim_rs = "0.34.0"
-tokio = { version = "1.36.0", features = ["macros", "rt", "rt-multi-thread", "sync", "net", "io-util", "time", "fs"] }
-rlbot_sockets = { path = "../core" }
+rocketsim = { git = "https://github.com/VirxEC/RocketSim.git", branch = "update-glam" }
+rlbot_flat = { git = "https://github.com/RLBot/rust-interface.git", rev = "80aa06a" }
+tokio = { version = "1.36.0", features = ["macros", "rt", "net", "io-util"] }
 thiserror = "2.0.3"
-toml = "0.8.10"
-ahash = "0.8.10"
 async-timer = { version = "1.0.0-beta.15", features = ["tokio1"] }
 clap = { version = "4.5.27", features = ["derive"] }
+
+[lints.rust]
+unsafe_code = "forbid"
 
 [lints.clippy]
 all = "warn"

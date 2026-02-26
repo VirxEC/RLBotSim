@@ -1,12 +1,4 @@
 /target
-**/generated
-**/collision_meshes
-.vscode
-*.log
-/assets
-rlviser*
-umodel*
-settings.txt
-assets.path
+/collision_meshes
 *.svg
 *.data*
