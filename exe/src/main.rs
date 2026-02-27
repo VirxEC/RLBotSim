@@ -27,13 +27,13 @@ pub const CLAP_STYLING: clap::builder::styling::Styles = clap::builder::styling:
     .placeholder(PLACEHOLDER);
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None, styles=CLAP_STYLING)]
+#[command(version, about, styles=CLAP_STYLING)]
 struct CliArgs {
     #[arg(long)]
-    /// Runs the simulation without rendering the game
+    /// Run without rendering the game
     headless: bool,
     #[arg(long)]
-    /// Runs the simulation as fast as inputs arrive
+    /// Run as fast as inputs arrive
     lockstep: bool,
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..), default_value_t = RLBOT_PORT)]
     /// The port to connect to RLBot on
