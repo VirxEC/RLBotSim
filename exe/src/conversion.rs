@@ -1,5 +1,5 @@
 use rlbot_flat::flat;
-use rocketsim::{Arena, ArenaEvent, CarControls, CarState, GameMode, Mat3A, Vec3A};
+use rocketsim::{Arena, ArenaEvent, CarControls, CarState, GameMode, Mat3A, Team, Vec3A};
 
 // custom from/into traits to convert between flat and rocketsim types
 pub trait FromThis<T> {
@@ -164,27 +164,16 @@ impl GamePacketExt for flat::GamePacket {
                 }
                 ArenaEvent::CarHitCar(info) => {
                     if info.is_demo {
+                        println!(
+                            "{} demolished {}",
+                            self.players[info.bumper_car_idx].name,
+                            self.players[info.victim_car_idx].name
+                        );
                         self.players[info.bumper_car_idx].score_info.demolitions += 1;
                     }
                 }
                 _ => {}
             }
-        }
-
-        if arena.is_ball_scored() {
-            let team_scored = usize::from(arena.get_ball_state().pos.y.is_sign_positive());
-            self.teams[team_scored].score += 1;
-            if self.match_info.is_overtime {
-                // end the match immediately if we're in overtime
-                self.match_info.match_phase = flat::MatchPhase::Ended;
-            }
-
-            arena.reset_to_random_kickoff();
-            self.match_info.match_phase = if match_config.instant_start {
-                flat::MatchPhase::Kickoff
-            } else {
-                flat::MatchPhase::Countdown
-            };
         }
 
         if match_length == 0 {
@@ -199,6 +188,7 @@ impl GamePacketExt for flat::GamePacket {
 
             if self.teams[0].score == self.teams[1].score {
                 // if the score is tied, go into overtime instead of ending the match
+                println!("Overtime!");
                 self.match_info.is_overtime = true;
                 arena.reset_to_random_kickoff();
                 self.match_info.match_phase = if match_config.instant_start {
@@ -208,6 +198,12 @@ impl GamePacketExt for flat::GamePacket {
                 };
             } else {
                 // otherwise, end the match
+                let winning_team = if self.teams[0].score > self.teams[1].score {
+                    Team::Blue
+                } else {
+                    Team::Orange
+                };
+                println!("The match is over! {winning_team:?} won!");
                 self.match_info.match_phase = flat::MatchPhase::Ended;
             }
         } else {
@@ -216,6 +212,34 @@ impl GamePacketExt for flat::GamePacket {
             self.match_info.game_time_remaining =
                 (self.match_info.frame_num - match_length) as f32 * TICK_TIME;
         };
+
+        if arena.is_ball_scored() {
+            let team_scored = usize::from(arena.get_ball_state().pos.y.is_sign_negative());
+            self.teams[team_scored].score += 1;
+
+            let minutes_remaining = (self.match_info.game_time_remaining / 60.0) as u32;
+            let seconds_remaining = (self.match_info.game_time_remaining % 60.0) as u32;
+
+            println!(
+                "{:?} team scored @ {minutes_remaining}:{seconds_remaining:02}! It is now {}:{}",
+                Team::ALL[team_scored],
+                self.teams[0].score,
+                self.teams[1].score
+            );
+
+            if self.match_info.is_overtime {
+                // end the match immediately if we're in overtime
+                println!("That was overtime, and the game is over!");
+                self.match_info.match_phase = flat::MatchPhase::Ended;
+            } else {
+                arena.reset_to_random_kickoff();
+                self.match_info.match_phase = if match_config.instant_start {
+                    flat::MatchPhase::Kickoff
+                } else {
+                    flat::MatchPhase::Countdown
+                };
+            }
+        }
 
         {
             let ball = arena.get_ball_state();
