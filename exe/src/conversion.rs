@@ -157,6 +157,10 @@ impl GamePacketExt for flat::GamePacket {
                     touch.game_seconds = self.match_info.seconds_elapsed;
 
                     player.latest_touch = Some(touch);
+
+                    if self.match_info.match_phase == flat::MatchPhase::Kickoff {
+                        self.match_info.match_phase = flat::MatchPhase::Active;
+                    }
                 }
                 ArenaEvent::CarHitCar(info) => {
                     if info.is_demo {

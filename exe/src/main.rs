@@ -2,7 +2,11 @@ use std::path::PathBuf;
 
 use clap::{
     Parser,
-    builder::styling::{AnsiColor, Effects, Style},
+    builder::{
+        Styles,
+        styling::{AnsiColor, Effects, Style},
+    },
+    value_parser,
 };
 use rocketsim::init;
 
@@ -20,7 +24,7 @@ pub const USAGE: Style = AnsiColor::BrightGreen.on_default().effects(Effects::BO
 pub const LITERAL: Style = AnsiColor::BrightCyan.on_default().effects(Effects::BOLD);
 pub const PLACEHOLDER: Style = AnsiColor::Cyan.on_default();
 
-pub const CLAP_STYLING: clap::builder::styling::Styles = clap::builder::styling::Styles::styled()
+pub const CLAP_STYLING: Styles = Styles::styled()
     .header(HEADER)
     .usage(USAGE)
     .literal(LITERAL)
@@ -35,7 +39,7 @@ struct CliArgs {
     #[arg(long)]
     /// Run as fast as inputs arrive
     lockstep: bool,
-    #[arg(long, value_parser = clap::value_parser!(u16).range(1..), default_value_t = RLBOT_PORT)]
+    #[arg(long, value_parser = value_parser!(u16).range(1..), default_value_t = RLBOT_PORT)]
     /// The port to connect to RLBot on
     rlbot_port: u16,
     #[arg(short, long, default_value = "./collision_meshes")]

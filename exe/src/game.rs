@@ -21,6 +21,8 @@ pub struct GameState {
     countdown_start: Option<u32>,
     /// length of the match in physics ticks
     match_length: u32,
+    /// the number of inputs received since the last time step
+    num_inputs: u64,
     state: flat::GamePacket,
 }
 
@@ -44,8 +46,9 @@ impl GameState {
             match_config: None,
             headless: args.headless,
             lockstep: args.lockstep,
-            countdown_start: Some(0),
-            match_length: 5 * 60 * u32::from(Self::TPS),
+            countdown_start: None,
+            num_inputs: 0,
+            match_length: 0,
             state: flat::GamePacket {
                 balls: Vec::with_capacity(1),
                 players: Vec::with_capacity(6),
@@ -86,24 +89,31 @@ impl GameState {
             return;
         }
 
-        if let Some(countdown_start) = self.countdown_start
-            && self.state.match_info.frame_num - countdown_start >= Self::NUM_COUNTDOWN_TICKS
-        {
-            self.state.match_info.match_phase = flat::MatchPhase::Kickoff;
+        if let Some(countdown_start) = self.countdown_start {
+            let countdown_elapsed = self.state.match_info.frame_num - countdown_start;
+            if countdown_elapsed >= Self::NUM_COUNTDOWN_TICKS {
+                println!("Go!");
+                self.countdown_start = None;
+                self.state.match_info.match_phase = flat::MatchPhase::Kickoff;
+            } else if countdown_elapsed.is_multiple_of(u32::from(GameState::TPS)) {
+                let time_remaining =
+                    (Self::NUM_COUNTDOWN_TICKS - countdown_elapsed) / u32::from(GameState::TPS);
+                println!("{time_remaining}...");
+            }
         }
 
         if self.state.match_info.match_phase == flat::MatchPhase::Countdown {
             if self.countdown_start.is_none() {
+                println!("Kickoff in 3...");
                 self.countdown_start = Some(self.state.match_info.frame_num);
             }
 
             for idx in 0..arena.num_cars() {
                 arena.set_car_controls(idx, CarControls::DEFAULT);
             }
-        } else {
-            self.countdown_start = None;
         }
 
+        self.num_inputs = 0;
         self.state.step(arena, match_config, self.match_length);
         self.connection
             .send_packet(self.state.clone())
@@ -127,6 +137,7 @@ impl GameState {
                     .map(|m| m.match_length)
                     .unwrap_or(flat::MatchLengthMutator::FiveMinutes);
 
+                self.num_inputs = 0;
                 self.match_length = match match_length {
                     flat::MatchLengthMutator::FiveMinutes => 5 * 60 * u32::from(Self::TPS),
                     flat::MatchLengthMutator::TenMinutes => 10 * 60 * u32::from(Self::TPS),
@@ -154,9 +165,14 @@ impl GameState {
                 self.state.match_info.world_gravity_z = GRAVITY_Z;
 
                 let game_mode = match_config.game_mode.into_that();
+
                 let mut arena = Arena::new_with_config(game_mode, self.default_config.clone());
                 arena.set_vis_enabled(!self.headless);
 
+                assert!(
+                    match_config.player_configurations.len() <= 64,
+                    "RLBotSim does not support more than 64 players!"
+                );
                 for player in &match_config.player_configurations {
                     match player.variety {
                         flat::PlayerClass::PsyonixBot(_) => {
@@ -298,13 +314,40 @@ impl GameState {
                     input.player_index as usize,
                     input.controller_state.into_that(),
                 );
+
+                if self.lockstep {
+                    self.num_inputs |= 1 << input.player_index;
+
+                    if self.num_inputs.count_ones() == arena.num_cars() as u32 {
+                        self.step().await;
+                    }
+                }
             }
             flat::InterfaceMessage::DisconnectSignal(_) => return ControlFlow::Break(()),
+            flat::InterfaceMessage::StartCommand(_) => {
+                // improvised ready message telling us all the bots have connected
+                let Some(match_config) = self.match_config.as_deref() else {
+                    return ControlFlow::Continue(());
+                };
+
+                // Start the game
+                self.state.match_info.match_phase = if match_config.instant_start {
+                    flat::MatchPhase::Kickoff
+                } else {
+                    flat::MatchPhase::Countdown
+                };
+
+                if self.lockstep {
+                    // Send out the initial game state
+                    self.step().await;
+                }
+            }
             flat::InterfaceMessage::StopCommand(cmd) => {
                 if cmd.shutdown_server {
                     return ControlFlow::Break(());
                 } else {
-                    todo!("ability to pause match")
+                    self.arena = None;
+                    self.state.match_info.match_phase = flat::MatchPhase::Ended;
                 }
             }
             _ => {}
