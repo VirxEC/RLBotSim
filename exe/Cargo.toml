@@ -8,7 +8,7 @@ description = "A backend for RLBotServer running RocketSim"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocketsim = { git = "https://github.com/VirxEC/RocketSim.git", branch = "update-glam" }
+rocketsim = { git = "https://github.com/ZealanL/RocketSim.git", branch = "v3-rust" }
 rlbot_flat = { git = "https://github.com/RLBot/rust-interface.git", rev = "80aa06a" }
 tokio = { version = "1.36.0", features = ["macros", "rt", "net", "io-util"] }
 thiserror = "2.0.3"

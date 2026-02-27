@@ -1672,7 +1672,7 @@ dependencies = [
 [[package]]
 name = "rocketsim"
 version = "0.2.0"
-source = "git+https://github.com/VirxEC/RocketSim.git?branch=update-glam#99912fce95f0386df019ca4420c745ae50ad7d09"
+source = "git+https://github.com/ZealanL/RocketSim.git?branch=v3-rust#12296f8403dd854e7a6f6ef7cbb09a6d9d3cf193"
 dependencies = [
  "ahash",
  "arrayvec",
@@ -1694,7 +1694,7 @@ dependencies = [
 [[package]]
 name = "rocketsim_derive"
 version = "0.1.0"
-source = "git+https://github.com/VirxEC/RocketSim.git?branch=update-glam#99912fce95f0386df019ca4420c745ae50ad7d09"
+source = "git+https://github.com/ZealanL/RocketSim.git?branch=v3-rust#12296f8403dd854e7a6f6ef7cbb09a6d9d3cf193"
 dependencies = [
  "quote",
  "syn",
