@@ -21,12 +21,12 @@ enum GenericMessage {
 
 impl From<InterfaceMessage> for GenericMessage {
     fn from(value: InterfaceMessage) -> Self {
-        GenericMessage::InterfaceMessage(value)
+        Self::InterfaceMessage(value)
     }
 }
 impl From<CoreMessage> for GenericMessage {
     fn from(value: CoreMessage) -> Self {
-        GenericMessage::CoreMessage(value)
+        Self::CoreMessage(value)
     }
 }
 
@@ -80,7 +80,7 @@ pub enum RLBotError {
 pub struct RLBotConnection {
     pub(crate) stream: TcpStream,
     builder: planus::Builder,
-    recv_buf: Box<[u8; u16::MAX as usize]>,
+    recv_buf: Box<[u8]>,
 }
 
 impl RLBotConnection {
@@ -124,7 +124,7 @@ impl RLBotConnection {
         Ok(Self {
             stream,
             builder: planus::Builder::with_capacity(1024),
-            recv_buf: Box::new([0u8; u16::MAX as usize]),
+            recv_buf: vec![0u8; u16::MAX as usize].into_boxed_slice(),
         })
     }
 }

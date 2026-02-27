@@ -23,11 +23,11 @@ where
 impl FromThis<flat::GameMode> for GameMode {
     fn from_this(value: flat::GameMode) -> Self {
         match value {
-            flat::GameMode::Soccar => GameMode::Soccar,
-            flat::GameMode::Hoops => GameMode::Hoops,
-            flat::GameMode::Heatseeker => GameMode::Heatseeker,
-            flat::GameMode::Snowday => GameMode::Snowday,
-            flat::GameMode::Dropshot => GameMode::Dropshot,
+            flat::GameMode::Soccar => Self::Soccar,
+            flat::GameMode::Hoops => Self::Hoops,
+            flat::GameMode::Heatseeker => Self::Heatseeker,
+            flat::GameMode::Snowday => Self::Snowday,
+            flat::GameMode::Dropshot => Self::Dropshot,
             game_mode => unimplemented!("Unsupported game mode: {:?}", game_mode),
         }
     }
@@ -35,7 +35,7 @@ impl FromThis<flat::GameMode> for GameMode {
 
 impl FromThis<Vec3A> for Box<flat::BoxShape> {
     fn from_this(value: Vec3A) -> Self {
-        let mut out = Box::<flat::BoxShape>::default();
+        let mut out = Self::default();
         out.length = value.x;
         out.width = value.y;
         out.height = value.z;
@@ -48,13 +48,13 @@ impl FromThis<&CarState> for flat::AirState {
     fn from_this(value: &CarState) -> Self {
         // todo: figure out how to determine flat::AirState::DoubleJumping
         if value.is_jumping {
-            flat::AirState::Jumping
+            Self::Jumping
         } else if value.is_auto_flipping || value.is_flipping {
-            flat::AirState::Dodging
+            Self::Dodging
         } else if value.is_on_ground {
-            flat::AirState::OnGround
+            Self::OnGround
         } else {
-            flat::AirState::InAir
+            Self::InAir
         }
     }
 }
@@ -75,7 +75,7 @@ impl FromThis<flat::Rotator> for Mat3A {
 
 impl FromThis<Mat3A> for flat::Rotator {
     fn from_this(value: Mat3A) -> Self {
-        flat::Rotator {
+        Self {
             pitch: value.x_axis.z.atan2(value.x_axis.x.hypot(value.x_axis.y)),
             yaw: value.x_axis.y.atan2(value.x_axis.x),
             roll: (-value.y_axis.z).atan2(value.z_axis.z),
@@ -211,7 +211,7 @@ impl GamePacketExt for flat::GamePacket {
             self.match_info.is_overtime = true;
             self.match_info.game_time_remaining =
                 (self.match_info.frame_num - match_length) as f32 * TICK_TIME;
-        };
+        }
 
         if arena.is_ball_scored() {
             let team_scored = usize::from(arena.get_ball_state().pos.y.is_sign_negative());

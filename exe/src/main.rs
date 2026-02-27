@@ -15,6 +15,7 @@ use crate::game::GameState;
 mod connection;
 mod conversion;
 mod game;
+mod lockstep_speed;
 
 /// The default port that we can use to talk to RLBot
 const RLBOT_PORT: u16 = 23233;

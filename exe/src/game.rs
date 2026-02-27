@@ -9,6 +9,7 @@ use crate::{
     CliArgs,
     connection::{RLBotConnection, connect_rlbot},
     conversion::{GamePacketExt, IntoThat},
+    lockstep_speed::LockstepSpeedTracker,
 };
 
 pub struct GameState {
@@ -24,6 +25,7 @@ pub struct GameState {
     /// the number of inputs received since the last time step
     num_inputs: u64,
     state: flat::GamePacket,
+    lockstep_speed: LockstepSpeedTracker,
 }
 
 impl GameState {
@@ -65,6 +67,10 @@ impl GameState {
                     },
                 ],
             },
+            lockstep_speed: LockstepSpeedTracker::new(
+                Duration::from_secs(1),
+                Duration::from_secs(5),
+            ),
         }
     }
 
@@ -95,9 +101,9 @@ impl GameState {
                 println!("Go!");
                 self.countdown_start = None;
                 self.state.match_info.match_phase = flat::MatchPhase::Kickoff;
-            } else if countdown_elapsed.is_multiple_of(u32::from(GameState::TPS)) {
+            } else if countdown_elapsed.is_multiple_of(u32::from(Self::TPS)) {
                 let time_remaining =
-                    (Self::NUM_COUNTDOWN_TICKS - countdown_elapsed) / u32::from(GameState::TPS);
+                    (Self::NUM_COUNTDOWN_TICKS - countdown_elapsed) / u32::from(Self::TPS);
                 println!("{time_remaining}...");
             }
         }
@@ -111,6 +117,12 @@ impl GameState {
             for idx in 0..arena.num_cars() {
                 arena.set_car_controls(idx, CarControls::DEFAULT);
             }
+        }
+
+        if self.lockstep
+            && let Some(speed) = self.lockstep_speed.on_step(Self::TPS)
+        {
+            println!("Current speed: {speed:.1}x");
         }
 
         self.num_inputs = 0;
@@ -134,8 +146,7 @@ impl GameState {
                 let match_length = match_config
                     .mutators
                     .as_ref()
-                    .map(|m| m.match_length)
-                    .unwrap_or(flat::MatchLengthMutator::FiveMinutes);
+                    .map_or(flat::MatchLengthMutator::FiveMinutes, |m| m.match_length);
 
                 self.num_inputs = 0;
                 self.match_length = match match_length {
@@ -163,6 +174,8 @@ impl GameState {
                 self.state.match_info.last_spectated = u32::MAX;
                 self.state.match_info.match_phase = flat::MatchPhase::Paused;
                 self.state.match_info.world_gravity_z = GRAVITY_Z;
+
+                self.lockstep_speed.reset();
 
                 let game_mode = match_config.game_mode.into_that();
 
@@ -338,6 +351,8 @@ impl GameState {
                 };
 
                 if self.lockstep {
+                    self.lockstep_speed.reset();
+
                     // Send out the initial game state
                     self.step().await;
                 }
@@ -345,10 +360,10 @@ impl GameState {
             flat::InterfaceMessage::StopCommand(cmd) => {
                 if cmd.shutdown_server {
                     return ControlFlow::Break(());
-                } else {
-                    self.arena = None;
-                    self.state.match_info.match_phase = flat::MatchPhase::Ended;
                 }
+
+                self.arena = None;
+                self.state.match_info.match_phase = flat::MatchPhase::Ended;
             }
             _ => {}
         }
@@ -362,9 +377,9 @@ impl GameState {
         loop {
             select! {
                 biased;
-                _ = tick_interval.wait() => self.step().await,
+                () = tick_interval.wait() => self.step().await,
                 Ok(msg) = self.connection.recv_packet() => {
-                    if let ControlFlow::Break(_) = self.handle_interface_msg(msg).await {
+                    if self.handle_interface_msg(msg).await == ControlFlow::Break(()) {
                         break;
                     }
                 }
@@ -375,7 +390,7 @@ impl GameState {
 
     async fn run_lockstep(&mut self) {
         while let Ok(msg) = self.connection.recv_packet().await {
-            if let ControlFlow::Break(_) = self.handle_interface_msg(msg).await {
+            if self.handle_interface_msg(msg).await == ControlFlow::Break(()) {
                 break;
             }
         }

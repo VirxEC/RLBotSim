@@ -20,3 +20,5 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = "warn"
+# pedantic = "warn"
+# nursery = "warn"
